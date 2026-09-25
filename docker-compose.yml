@@ -1,0 +1,16 @@
+services:
+  ndtp-emu:
+    image: ndtp-telemetry-emulator:1.0
+    container_name: ndtp-emu
+    ports:
+      - "18080:18080"
+
+  backend:
+    build: ./backend
+    container_name: mthack-backend
+    ports:
+      - "8000:8000"
+    environment:
+      NDTP_EMULATOR_URL: http://ndtp-emu:18080
+    depends_on:
+      - ndtp-emu
