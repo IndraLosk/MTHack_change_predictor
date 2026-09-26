@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from . import settings
 from .ndtp import receiver
-from .routes import emulator, system, telemetry
+from .routes import emulator, predictions, system, telemetry
 
 
 @asynccontextmanager
@@ -33,3 +33,4 @@ app = FastAPI(
 app.include_router(system.router)
 app.include_router(emulator.router)
 app.include_router(telemetry.router)
+app.include_router(predictions.router)

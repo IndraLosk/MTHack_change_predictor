@@ -14,6 +14,8 @@ from .decoder import (
 )
 
 RECEIVED = deque(maxlen=500)
+
+LATEST: dict[int, dict] = {}
 CSV_QUEUE = deque()
 CSV_FIELDS = [
     "packet_id",
@@ -61,6 +63,7 @@ async def _handle_client(reader, writer):
                     row["tr_id"] = peer
                     row["raw_hex"] = frame.hex()
                     RECEIVED.append(row)
+                    LATEST[peer] = row
                     CSV_QUEUE.append(row)
     except (ConnectionError, asyncio.CancelledError):
         pass
@@ -74,6 +77,10 @@ async def start_receiver(port: int):
 
 def recent(limit: int) -> list:
     return list(RECEIVED)[-limit:]
+
+
+def latest(limit: int = 500) -> list:
+    return list(LATEST.values())[-limit:]
 
 
 def _to_traffic_csv_timestamp(ts) -> str:

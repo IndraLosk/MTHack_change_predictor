@@ -13,3 +13,13 @@ async def ndtp_decoded(limit: int = 50):
         "limit": limit,
         "rows": rows,
     }
+
+
+@router.get("/latest")
+async def ndtp_latest(limit: int = 500):
+    rows = receiver.latest(limit)
+    return {
+        "total": len(rows),
+        "limit": limit,
+        "rows": rows,
+    }
