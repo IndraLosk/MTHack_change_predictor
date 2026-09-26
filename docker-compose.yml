@@ -5,6 +5,18 @@ services:
     ports:
       - "18080:18080"
 
+  db:
+    image: postgres:16-alpine
+    container_name: mthack-db
+    environment:
+      POSTGRES_USER: mthack
+      POSTGRES_PASSWORD: mthack
+      POSTGRES_DB: mthack
+    ports:
+      - "5433:5432"
+    volumes:
+      - "./pgdata:/var/lib/postgresql/data"
+
   backend:
     build: ./backend
     container_name: mthack-backend
@@ -12,5 +24,14 @@ services:
       - "8000:8000"
     environment:
       NDTP_EMULATOR_URL: http://ndtp-emu:18080
+      NDTP_CSV_INTERVAL: 5
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: mthack
+      DB_PASSWORD: mthack
+      DB_NAME: mthack
+    volumes:
+      - "./data:/app/data"
     depends_on:
       - ndtp-emu
+      - db

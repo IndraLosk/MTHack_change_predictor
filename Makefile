@@ -1,4 +1,4 @@
-.PHONY: build up down stop restart ps logs health cells check
+.PHONY: build up down stop restart ps logs health cells db-psql db-show
 
 build:
 	docker compose build
@@ -27,5 +27,8 @@ health:
 cells:
 	curl.exe -s http://localhost:8000/api/cells
 
-check:
-	powershell -ExecutionPolicy Bypass -File requests/check-status.ps1
+db-psql:
+	docker compose exec db psql -U mthack -d mthack
+
+db-show:
+	docker compose exec db psql -U mthack -d mthack -c "\dt"

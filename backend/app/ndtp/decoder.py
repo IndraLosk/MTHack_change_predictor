@@ -1,3 +1,9 @@
+"""Декодирование бинарных пакетов NDTP в колонки traffic.csv.
+
+Слой протокола: не знает о FastAPI и HTTP. Только байты на входе,
+словарь с колонками на выходе.
+"""
+
 import struct
 
 NPL_STRUCT = struct.Struct("<HHHHBIH")
@@ -10,6 +16,7 @@ CELL_NAV00 = 0
 
 
 def decode_nav00(payload: bytes) -> dict:
+    """Превращает 26 байт ячейки навигации в колонки traffic.csv."""
     (timestamp, lon_raw, lat_raw, extra_dop, bat_voltage,
      speed_avg, speed_max, course, track, altitude, nsat, pdop) = NAV00_STRUCT.unpack(payload)
 
@@ -30,6 +37,7 @@ def decode_nav00(payload: bytes) -> dict:
 
 
 def extract_nav00(payload: bytes) -> dict:
+    """Достаёт ячейку навигации из начала тела пакета и раскодирует её."""
     cell_type, cell_number = payload[0], payload[1]
     if cell_type != CELL_NAV00:
         raise ValueError(f"not a NAV00 cell: type={cell_type}")
@@ -37,6 +45,7 @@ def extract_nav00(payload: bytes) -> dict:
 
 
 def split_frame(frame: bytes):
+    """Разбирает полный кадр на NPL/NPH/тело, возвращает peer_address."""
     signature, data_size, _flags, _crc, _pkt_type, peer_address, _req = NPL_STRUCT.unpack_from(frame, 0)
     if signature != SIGNATURE:
         raise ValueError("bad NPL signature")

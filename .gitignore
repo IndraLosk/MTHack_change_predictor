@@ -71,3 +71,7 @@ dataset/validate/traffic.csv
 dataset/validate/schedule_plan.csv
 dataset/ndtp-telemetry-emulator.tar
 # Маленькие файлы (labels, points, описание, submission-шаблон) остаются в репо.
+
+# --- Данные приложения ---
+pgdata/
+data/
