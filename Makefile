@@ -22,10 +22,10 @@ logs:
 	docker compose logs -f
 
 health:
-	curl.exe -s http://localhost:8000/health
+	curl -s http://localhost:8000/health
 
 cells:
-	curl.exe -s http://localhost:8000/api/cells
+	curl -s http://localhost:8000/api/cells
 
 db-psql:
 	docker compose exec db psql -U mthack -d mthack
