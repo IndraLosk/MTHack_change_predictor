@@ -52,7 +52,7 @@ services:
       - ml-model
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:13.2.2
     container_name: mthack-grafana
     ports:
       - "3000:3000"

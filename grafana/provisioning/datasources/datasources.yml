@@ -16,3 +16,18 @@ datasources:
       timescaledb: false
     isDefault: true
     editable: true
+
+  - name: grafana-postgresql-datasource
+    uid: dfzjcy11ify0wa
+    type: postgres
+    access: proxy
+    url: db:5432
+    database: mthack
+    user: mthack
+    secureJsonData:
+      password: mthack
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    editable: true
