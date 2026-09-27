@@ -1,0 +1,298 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ML-модуль (LightGBM-инференс) &mdash; MTHack_change_predictor 1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=f2a433a1"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="Backend (FastAPI)" href="backend.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            MTHack_change_predictor
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Модули</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="backend.html">Backend (FastAPI)</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">ML-модуль (LightGBM-инференс)</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#module-features">Пайплайн признаков</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#features.build_features"><code class="docutils literal notranslate"><span class="pre">build_features()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#features.hav"><code class="docutils literal notranslate"><span class="pre">hav()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#features.parse_geom"><code class="docutils literal notranslate"><span class="pre">parse_geom()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#module-model_service">Сервисная обёртка модели</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#model_service.DelayModelService"><code class="docutils literal notranslate"><span class="pre">DelayModelService</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#model_service.DelayModelService.health"><code class="docutils literal notranslate"><span class="pre">DelayModelService.health()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#model_service.DelayModelService.predict"><code class="docutils literal notranslate"><span class="pre">DelayModelService.predict()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#model_service.DelayModelService.ready"><code class="docutils literal notranslate"><span class="pre">DelayModelService.ready</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#module-map_matching">Map Matching</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#map_matching.MapMatcher"><code class="docutils literal notranslate"><span class="pre">MapMatcher</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#map_matching.MapMatcher.dist_to_stop"><code class="docutils literal notranslate"><span class="pre">MapMatcher.dist_to_stop()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#map_matching.MapMatcher.match"><code class="docutils literal notranslate"><span class="pre">MapMatcher.match()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#map_matching.decode_geom"><code class="docutils literal notranslate"><span class="pre">decode_geom()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#module-worker">Воркер инференса</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#worker.fetchtab"><code class="docutils literal notranslate"><span class="pre">fetchtab()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.infer"><code class="docutils literal notranslate"><span class="pre">infer()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.init_db"><code class="docutils literal notranslate"><span class="pre">init_db()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.live_early_warning"><code class="docutils literal notranslate"><span class="pre">live_early_warning()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.load_csv"><code class="docutils literal notranslate"><span class="pre">load_csv()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.main"><code class="docutils literal notranslate"><span class="pre">main()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.map_match_telemetry"><code class="docutils literal notranslate"><span class="pre">map_match_telemetry()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#worker.seed_static"><code class="docutils literal notranslate"><span class="pre">seed_static()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">MTHack_change_predictor</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">ML-модуль (LightGBM-инференс)</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/modules/ml.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ml-lightgbm">
+<h1>ML-модуль (LightGBM-инференс)<a class="headerlink" href="#ml-lightgbm" title="Link to this heading"></a></h1>
+<section id="module-features">
+<span id="id1"></span><h2>Пайплайн признаков<a class="headerlink" href="#module-features" title="Link to this heading"></a></h2>
+<p>Пайплайн признаков для предиктора задержек городского транспорта.
+Работает одинаково для train (labels_train.csv) и validate (points.csv):
+используются только данные, доступные на момент T (анти-утечка).</p>
+<dl class="simple">
+<dt>Использование:</dt><dd><p>feats = build_features(points_df, traffic_df, schedule_df)
+# points_df: sample_id, tr_id, T, target_stop_id, target_time_begin, cur_dev_s
+# schedule_df: для validate — schedule_plan.csv (time_fact_begin может отсутствовать)</p>
+</dd>
+</dl>
+<dl class="py function">
+<dt class="sig sig-object py" id="features.build_features">
+<span class="sig-prename descclassname"><span class="pre">features.</span></span><span class="sig-name descname"><span class="pre">build_features</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">points</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">traffic</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schedule</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/features.html#build_features"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#features.build_features" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="features.hav">
+<span class="sig-prename descclassname"><span class="pre">features.</span></span><span class="sig-name descname"><span class="pre">hav</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lat1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lon1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lat2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lon2</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/features.html#hav"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#features.hav" title="Link to this definition"></a></dt>
+<dd><p>Гаверсинус, метры (принимает numpy-массивы).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="features.parse_geom">
+<span class="sig-prename descclassname"><span class="pre">features.</span></span><span class="sig-name descname"><span class="pre">parse_geom</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">s</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/features.html#parse_geom"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#features.parse_geom" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</section>
+<section id="module-model_service">
+<span id="id2"></span><h2>Сервисная обёртка модели<a class="headerlink" href="#module-model_service" title="Link to this heading"></a></h2>
+<p>Сервисная обёртка модели для бэкенда.</p>
+<p>Принцип: модель загружается из файла ОДИН раз при старте сервиса, дальше используется только predict.</p>
+<p>Использование (FastAPI и любой другой фреймворк):</p>
+<blockquote>
+<div><p>from model_service import model   # singleton, грузится при импорте</p>
+<p>&#64;app.post(‘/predict’)
+def predict(payload):</p>
+<blockquote>
+<div><p>preds = model.predict(points_df, traffic_df, schedule_df)
+return {‘predictions’: preds.round(1).to_dict()}</p>
+</div></blockquote>
+</div></blockquote>
+<p>Путь к модели задаётся переменной окружения MODEL_PATH (по умолчанию model.txt рядом со скриптом) — это позволяет подменять версию модели без правки кода.</p>
+<p>Если файл модели недоступен при старте, сервис не падает — model.ready=False, predict вернёт None,
+и бэкенд может отдать baseline cur_dev_s или последний известный прогноз.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="model_service.DelayModelService">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">model_service.</span></span><span class="sig-name descname"><span class="pre">DelayModelService</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'C:\\school21\\my\\MTHack_change_predictor\\ml-model\\model.txt'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/model_service.html#DelayModelService"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#model_service.DelayModelService" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Тонкая обёртка над LightGBM Booster для инференса в бэкенде.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="model_service.DelayModelService.health">
+<span class="sig-name descname"><span class="pre">health</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/model_service.html#DelayModelService.health"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#model_service.DelayModelService.health" title="Link to this definition"></a></dt>
+<dd><p>Статус для /health эндпоинта бэкенда.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="model_service.DelayModelService.predict">
+<span class="sig-name descname"><span class="pre">predict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">points</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">pandas.DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">traffic</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">pandas.DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schedule</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">pandas.DataFrame</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/model_service.html#DelayModelService.predict"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#model_service.DelayModelService.predict" title="Link to this definition"></a></dt>
+<dd><p>points/traffic/schedule -&gt; pd.Series прогнозов задержки (сек),
+индекс = sample_id. None, если модель не загружена.</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="model_service.DelayModelService.ready">
+<span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">ready</span></span><a class="headerlink" href="#model_service.DelayModelService.ready" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-map_matching">
+<span id="map-matching"></span><h2>Map Matching<a class="headerlink" href="#module-map_matching" title="Link to this heading"></a></h2>
+<p>Map Matching: привязка GPS-позиций к нити графика маршрута (с учётом курса).</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="map_matching.MapMatcher">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">map_matching.</span></span><span class="sig-name descname"><span class="pre">MapMatcher</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">stops</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_heading</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/map_matching.html#MapMatcher"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#map_matching.MapMatcher" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Привязывает GPS-точки к полилинии маршрута, построенной из остановок.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="map_matching.MapMatcher.dist_to_stop">
+<span class="sig-name descname"><span class="pre">dist_to_stop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lat</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lon</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_stop</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">along_route</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/map_matching.html#MapMatcher.dist_to_stop"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#map_matching.MapMatcher.dist_to_stop" title="Link to this definition"></a></dt>
+<dd><p>Дистанция до целевой остановки: по нити маршрута или по прямой.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="map_matching.MapMatcher.match">
+<span class="sig-name descname"><span class="pre">match</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">lat</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lon</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">heading</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">speed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/map_matching.html#MapMatcher.match"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#map_matching.MapMatcher.match" title="Link to this definition"></a></dt>
+<dd><p>Привязывает точку к маршруту (с учётом курса) и возвращает метрики.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map_matching.decode_geom">
+<span class="sig-prename descclassname"><span class="pre">map_matching.</span></span><span class="sig-name descname"><span class="pre">decode_geom</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">geom</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/map_matching.html#decode_geom"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#map_matching.decode_geom" title="Link to this definition"></a></dt>
+<dd><p>Парсит ‘POINT (lon lat)’ в пару (lat, lon).</p>
+</dd></dl>
+
+</section>
+<section id="module-worker">
+<span id="id3"></span><h2>Воркер инференса<a class="headerlink" href="#module-worker" title="Link to this heading"></a></h2>
+<p>ML-воркер: инференс через общую БД</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.fetchtab">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">fetchtab</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sql</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span></span></span><a class="reference internal" href="../_modules/worker.html#fetchtab"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.fetchtab" title="Link to this definition"></a></dt>
+<dd><p>Выполнить SELECT и вернуть строки как list[dict] (для pandas).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.infer">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">infer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conn</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/worker.html#infer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.infer" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.init_db">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">init_db</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conn</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/worker.html#init_db"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.init_db" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.live_early_warning">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">live_early_warning</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conn</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/worker.html#live_early_warning"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.live_early_warning" title="Link to this definition"></a></dt>
+<dd><p>Живое раннее оповещение на потоке.</p>
+<p>Для каждого активного ТС ищет ближайшую плановую остановку из schedule_stops,
+чьё плановое прибытие попадает в окно T+10..15 мин (горизонт из ТЗ), собирает
+те же 24 признака (features.build_features, только данные на момент T) и сразу
+пишет прогноз задержки в predictions. Прогноз подписан: ‘+’ =&gt; опоздание,
+‘-’ =&gt; опережение.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.load_csv">
+<span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">load_csv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">pandas.DataFrame</span></span></span><a class="reference internal" href="../_modules/worker.html#load_csv"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.load_csv" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.main">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">main</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/worker.html#main"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.main" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.map_match_telemetry">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">map_match_telemetry</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conn</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/worker.html#map_match_telemetry"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.map_match_telemetry" title="Link to this definition"></a></dt>
+<dd><p>Map Matching: проецирует телеметрию на нить маршрута в route_features.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="worker.seed_static">
+<span class="property"><span class="k"><span class="pre">async</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">worker.</span></span><span class="sig-name descname"><span class="pre">seed_static</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conn</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/worker.html#seed_static"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#worker.seed_static" title="Link to this definition"></a></dt>
+<dd><p>Заполняет таблицы forecast_points/schedule_stops из CSV, если пусты.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="backend.html" class="btn btn-neutral float-left" title="Backend (FastAPI)" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, MTHack team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
