@@ -1,0 +1,216 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>app.routes.fleet &mdash; MTHack_change_predictor 1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=f2a433a1"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            MTHack_change_predictor
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Модули</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../modules/backend.html">Backend (FastAPI)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../modules/ml.html">ML-модуль (LightGBM-инференс)</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">MTHack_change_predictor</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">app.routes.fleet</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for app.routes.fleet</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Эндпоинты производных признаков, what-if и состояния очередей.&quot;&quot;&quot;</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">APIRouter</span><span class="p">,</span> <span class="n">HTTPException</span><span class="p">,</span> <span class="n">Request</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">Field</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">..ndtp</span><span class="w"> </span><span class="kn">import</span> <span class="n">receiver</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">..services</span><span class="w"> </span><span class="kn">import</span> <span class="n">derived_features</span>
+
+<span class="n">router</span> <span class="o">=</span> <span class="n">APIRouter</span><span class="p">(</span><span class="n">prefix</span><span class="o">=</span><span class="s2">&quot;/api&quot;</span><span class="p">,</span> <span class="n">tags</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;fleet&quot;</span><span class="p">])</span>
+
+
+<div class="viewcode-block" id="FleetFeature">
+<a class="viewcode-back" href="../../../modules/backend.html#app.routes.fleet.FleetFeature">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">FleetFeature</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Производные признаки одного ТС.&quot;&quot;&quot;</span>
+    <span class="n">tr_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">n_points</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Число телеметрических точек&quot;</span><span class="p">)</span>
+    <span class="n">avg_speed_kmh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Средняя скорость за окно&quot;</span><span class="p">)</span>
+    <span class="n">idle_points</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Число точек в простое (speed&lt;3)&quot;</span><span class="p">)</span>
+    <span class="n">idle_share</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Доля времени простоя, 0..1&quot;</span><span class="p">)</span>
+    <span class="n">route_len_m</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">route_progress_m</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">route_progress_frac</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Доля пройденного маршрута&quot;</span><span class="p">)</span>
+    <span class="n">next_stop_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">seg_speed_kmh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Скорость на текущем сегменте&quot;</span><span class="p">)</span>
+    <span class="n">deviation_s</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Текущее отклонение от графика, сек&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="FleetFeaturesResponse">
+<a class="viewcode-back" href="../../../modules/backend.html#app.routes.fleet.FleetFeaturesResponse">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">FleetFeaturesResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Признаки всех активных ТС парка.&quot;&quot;&quot;</span>
+    <span class="n">tr_id</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">features</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">FleetFeature</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="WhatifRequest">
+<a class="viewcode-back" href="../../../modules/backend.html#app.routes.fleet.WhatifRequest">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">WhatifRequest</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Сценарий what-if: выпуск дополнительных ТС на маршрут.&quot;&quot;&quot;</span>
+    <span class="n">tr_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Нить маршрута (ID ТС)&quot;</span><span class="p">)</span>
+    <span class="n">add_vehicles</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Сколько доп. ТС выпустить&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="WhatifResponse">
+<a class="viewcode-back" href="../../../modules/backend.html#app.routes.fleet.WhatifResponse">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">WhatifResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Результат симуляции: метрики «до/после».&quot;&quot;&quot;</span>
+    <span class="n">tr_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">route_len_m</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">active_vehicles</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">add_vehicles</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">avg_speed_kmh</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">interval_before_s</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">interval_after_s</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">delay_before_s</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">delay_after_s</span><span class="p">:</span> <span class="nb">float</span></div>
+
+
+
+<div class="viewcode-block" id="QueueStatusResponse">
+<a class="viewcode-back" href="../../../modules/backend.html#app.routes.fleet.QueueStatusResponse">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">QueueStatusResponse</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Состояние буферов приёма телеметрии.&quot;&quot;&quot;</span>
+    <span class="n">received_total</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Строк в буфере истории&quot;</span><span class="p">)</span>
+    <span class="n">csv_queue_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Строк в очереди на запись&quot;</span><span class="p">)</span>
+    <span class="n">csv_queue_maxlen</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Макс. размер очереди&quot;</span><span class="p">)</span>
+    <span class="n">csv_dropped</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Отброшено строк при переполнении&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@router</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/fleet/features&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="n">FleetFeaturesResponse</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fleet_features</span><span class="p">(</span><span class="n">request</span><span class="p">:</span> <span class="n">Request</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Производные признаки парка: скорость, простой, позиция на маршруте.&quot;&quot;&quot;</span>
+    <span class="n">tele</span> <span class="o">=</span> <span class="n">receiver</span><span class="o">.</span><span class="n">recent</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">app</span><span class="o">.</span><span class="n">state</span><span class="p">,</span> <span class="s2">&quot;db&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="n">tele</span> <span class="ow">and</span> <span class="n">db</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">sched</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">fetch_schedule_stops</span><span class="p">()</span>
+        <span class="n">raw</span> <span class="o">=</span> <span class="n">derived_features</span><span class="o">.</span><span class="n">fleet_features</span><span class="p">(</span><span class="n">tele</span><span class="p">,</span> <span class="n">sched</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">raw</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s2">&quot;tr_id&quot;</span> <span class="ow">in</span> <span class="n">f</span> <span class="ow">and</span> <span class="n">f</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">f</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">f</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">])</span>
+            <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">FleetFeaturesResponse</span><span class="p">(</span><span class="n">tr_id</span><span class="o">=</span><span class="p">[</span><span class="n">f</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">out</span><span class="p">],</span> <span class="n">features</span><span class="o">=</span><span class="n">out</span><span class="p">)</span>
+
+
+<span class="nd">@router</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">&quot;/whatif&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="n">WhatifResponse</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">whatif</span><span class="p">(</span><span class="n">payload</span><span class="p">:</span> <span class="n">WhatifRequest</span><span class="p">,</span> <span class="n">request</span><span class="p">:</span> <span class="n">Request</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;What-if: оценивает влияние выпуска доп. ТС на интервалы маршрута.&quot;&quot;&quot;</span>
+    <span class="n">db</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">app</span><span class="o">.</span><span class="n">state</span><span class="p">,</span> <span class="s2">&quot;db&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">db</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="s2">&quot;БД недоступна&quot;</span><span class="p">)</span>
+
+    <span class="n">sched</span> <span class="o">=</span> <span class="k">await</span> <span class="n">db</span><span class="o">.</span><span class="n">fetch_schedule_stops</span><span class="p">()</span>
+    <span class="n">tele</span> <span class="o">=</span> <span class="n">receiver</span><span class="o">.</span><span class="n">recent</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">derived_features</span><span class="o">.</span><span class="n">whatif_add_vehicle</span><span class="p">(</span><span class="n">sched</span><span class="p">,</span> <span class="n">tele</span><span class="p">,</span> <span class="n">payload</span><span class="o">.</span><span class="n">tr_id</span><span class="p">,</span> <span class="n">payload</span><span class="o">.</span><span class="n">add_vehicles</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">404</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;нет данных по маршруту </span><span class="si">{</span><span class="n">payload</span><span class="o">.</span><span class="n">tr_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result</span>
+
+
+<span class="nd">@router</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/queue/status&quot;</span><span class="p">,</span> <span class="n">response_model</span><span class="o">=</span><span class="n">QueueStatusResponse</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">queue_status</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Состояние буферов приёма: подтверждение отсутствия накопления.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">QueueStatusResponse</span><span class="p">(</span>
+        <span class="n">received_total</span><span class="o">=</span><span class="n">receiver</span><span class="o">.</span><span class="n">total</span><span class="p">(),</span>
+        <span class="n">csv_queue_size</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">receiver</span><span class="o">.</span><span class="n">CSV_QUEUE</span><span class="p">),</span>
+        <span class="n">csv_queue_maxlen</span><span class="o">=</span><span class="n">receiver</span><span class="o">.</span><span class="n">CSV_QUEUE</span><span class="o">.</span><span class="n">maxlen</span><span class="p">,</span>
+        <span class="n">csv_dropped</span><span class="o">=</span><span class="n">receiver</span><span class="o">.</span><span class="n">csv_dropped</span><span class="p">(),</span>
+    <span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, MTHack team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

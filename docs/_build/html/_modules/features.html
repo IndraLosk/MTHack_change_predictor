@@ -1,0 +1,226 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>features &mdash; MTHack_change_predictor 1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=f2a433a1"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            MTHack_change_predictor
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Модули</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../modules/backend.html">Backend (FastAPI)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../modules/ml.html">ML-модуль (LightGBM-инференс)</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">MTHack_change_predictor</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Module code</a></li>
+      <li class="breadcrumb-item active">features</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for features</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Пайплайн признаков для предиктора задержек городского транспорта.</span>
+<span class="sd">Работает одинаково для train (labels_train.csv) и validate (points.csv):</span>
+<span class="sd">используются только данные, доступные на момент T (анти-утечка).</span>
+
+<span class="sd">Использование:</span>
+<span class="sd">    feats = build_features(points_df, traffic_df, schedule_df)</span>
+<span class="sd">    # points_df: sample_id, tr_id, T, target_stop_id, target_time_begin, cur_dev_s</span>
+<span class="sd">    # schedule_df: для validate — schedule_plan.csv (time_fact_begin может отсутствовать)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="n">FEATURES</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s1">&#39;horizon_min&#39;</span><span class="p">,</span> <span class="s1">&#39;hour&#39;</span><span class="p">,</span> <span class="s1">&#39;minute&#39;</span><span class="p">,</span> <span class="s1">&#39;dow&#39;</span><span class="p">,</span> <span class="s1">&#39;t_since_last_s&#39;</span><span class="p">,</span> <span class="s1">&#39;last_speed&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;last_lon&#39;</span><span class="p">,</span> <span class="s1">&#39;last_lat&#39;</span><span class="p">,</span> <span class="s1">&#39;speed_mean_5m&#39;</span><span class="p">,</span> <span class="s1">&#39;speed_max_5m&#39;</span><span class="p">,</span> <span class="s1">&#39;speed_std_5m&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;stop_share_5m&#39;</span><span class="p">,</span> <span class="s1">&#39;speed_mean_10m&#39;</span><span class="p">,</span> <span class="s1">&#39;speed_max_10m&#39;</span><span class="p">,</span> <span class="s1">&#39;speed_std_10m&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;stop_share_10m&#39;</span><span class="p">,</span> <span class="s1">&#39;dist_10m_m&#39;</span><span class="p">,</span> <span class="s1">&#39;plan_seg_s&#39;</span><span class="p">,</span> <span class="s1">&#39;dist_to_target_m&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;req_speed_kmh&#39;</span><span class="p">,</span> <span class="s1">&#39;eta_delay_5m&#39;</span><span class="p">,</span> <span class="s1">&#39;eta_delay_10m&#39;</span><span class="p">,</span> <span class="s1">&#39;n_stops_between&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;cur_dev_s&#39;</span><span class="p">,</span>
+<span class="p">]</span>
+
+
+<div class="viewcode-block" id="parse_geom">
+<a class="viewcode-back" href="../modules/ml.html#features.parse_geom">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">parse_geom</span><span class="p">(</span><span class="n">s</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">isna</span><span class="p">(</span><span class="n">s</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+    <span class="n">m</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;POINT \(([\d.]+) ([\d.]+)\)&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">s</span><span class="p">))</span>
+    <span class="k">return</span> <span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)),</span> <span class="nb">float</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">2</span><span class="p">)))</span> <span class="k">if</span> <span class="n">m</span> <span class="k">else</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="hav">
+<a class="viewcode-back" href="../modules/ml.html#features.hav">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">hav</span><span class="p">(</span><span class="n">lat1</span><span class="p">,</span> <span class="n">lon1</span><span class="p">,</span> <span class="n">lat2</span><span class="p">,</span> <span class="n">lon2</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Гаверсинус, метры (принимает numpy-массивы).&quot;&quot;&quot;</span>
+    <span class="n">R</span> <span class="o">=</span> <span class="mf">6371000.0</span>
+    <span class="n">p1</span><span class="p">,</span> <span class="n">p2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lat1</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lat2</span><span class="p">)</span>
+    <span class="n">dp</span><span class="p">,</span> <span class="n">dl</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lat2</span> <span class="o">-</span> <span class="n">lat1</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lon2</span> <span class="o">-</span> <span class="n">lon1</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">dp</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">p1</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">p2</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">dl</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+    <span class="k">return</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">R</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">arcsin</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">a</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="build_features">
+<a class="viewcode-back" href="../modules/ml.html#features.build_features">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_features</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">traffic</span><span class="p">,</span> <span class="n">schedule</span><span class="p">):</span>
+    <span class="n">points</span> <span class="o">=</span> <span class="n">points</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">traffic</span> <span class="o">=</span> <span class="n">traffic</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">schedule</span> <span class="o">=</span> <span class="n">schedule</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">points</span><span class="p">[</span><span class="s1">&#39;T&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">points</span><span class="p">[</span><span class="s1">&#39;T&#39;</span><span class="p">])</span>
+    <span class="n">points</span><span class="p">[</span><span class="s1">&#39;target_time_begin&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">points</span><span class="p">[</span><span class="s1">&#39;target_time_begin&#39;</span><span class="p">])</span>
+    <span class="n">traffic</span><span class="p">[</span><span class="s1">&#39;event_time&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">traffic</span><span class="p">[</span><span class="s1">&#39;event_time&#39;</span><span class="p">])</span>
+    <span class="n">schedule</span><span class="p">[</span><span class="s1">&#39;time_begin&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">schedule</span><span class="p">[</span><span class="s1">&#39;time_begin&#39;</span><span class="p">])</span>
+
+    <span class="n">schedule</span><span class="p">[[</span><span class="s1">&#39;stop_lon&#39;</span><span class="p">,</span> <span class="s1">&#39;stop_lat&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+        <span class="n">schedule</span><span class="p">[</span><span class="s1">&#39;geom&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">parse_geom</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span> <span class="n">index</span><span class="o">=</span><span class="n">schedule</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+    <span class="n">sched_sorted</span> <span class="o">=</span> <span class="n">schedule</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s1">&#39;tr_id&#39;</span><span class="p">,</span> <span class="s1">&#39;time_begin&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">sched_sorted</span><span class="p">[</span><span class="s1">&#39;prev_time_begin&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sched_sorted</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;tr_id&#39;</span><span class="p">)[</span><span class="s1">&#39;time_begin&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">sched_sorted</span><span class="p">[</span><span class="s1">&#39;plan_seg_s&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">sched_sorted</span><span class="p">[</span><span class="s1">&#39;time_begin&#39;</span><span class="p">]</span> <span class="o">-</span> <span class="n">sched_sorted</span><span class="p">[</span><span class="s1">&#39;prev_time_begin&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+    <span class="n">sched_by_stop</span> <span class="o">=</span> <span class="n">sched_sorted</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">&#39;tt_action_item_id&#39;</span><span class="p">)</span>
+
+    <span class="n">tele</span> <span class="o">=</span> <span class="n">traffic</span><span class="p">[</span><span class="n">traffic</span><span class="p">[</span><span class="s1">&#39;location_valid&#39;</span><span class="p">]]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s1">&#39;tr_id&#39;</span><span class="p">,</span> <span class="s1">&#39;event_time&#39;</span><span class="p">])</span>
+    <span class="n">tele_grp</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">tele</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;tr_id&#39;</span><span class="p">)))</span>
+
+    <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">points</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">tr</span><span class="p">,</span> <span class="n">T</span> <span class="o">=</span> <span class="n">r</span><span class="p">[</span><span class="s1">&#39;tr_id&#39;</span><span class="p">],</span> <span class="n">r</span><span class="p">[</span><span class="s1">&#39;T&#39;</span><span class="p">]</span>
+        <span class="n">f</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;sample_id&#39;</span><span class="p">:</span> <span class="n">r</span><span class="p">[</span><span class="s1">&#39;sample_id&#39;</span><span class="p">],</span> <span class="s1">&#39;cur_dev_s&#39;</span><span class="p">:</span> <span class="n">r</span><span class="p">[</span><span class="s1">&#39;cur_dev_s&#39;</span><span class="p">],</span>
+             <span class="s1">&#39;horizon_min&#39;</span><span class="p">:</span> <span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;target_time_begin&#39;</span><span class="p">]</span> <span class="o">-</span> <span class="n">T</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">/</span> <span class="mi">60</span><span class="p">,</span>
+             <span class="s1">&#39;hour&#39;</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">hour</span><span class="p">,</span> <span class="s1">&#39;minute&#39;</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">minute</span><span class="p">,</span> <span class="s1">&#39;dow&#39;</span><span class="p">:</span> <span class="n">T</span><span class="o">.</span><span class="n">dayofweek</span><span class="p">}</span>
+
+        <span class="n">g</span> <span class="o">=</span> <span class="n">tele_grp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">tr</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">g</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">hist</span> <span class="o">=</span> <span class="n">g</span><span class="p">[</span><span class="n">g</span><span class="p">[</span><span class="s1">&#39;event_time&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span> <span class="o">&lt;=</span> <span class="n">np</span><span class="o">.</span><span class="n">datetime64</span><span class="p">(</span><span class="n">T</span><span class="p">)]</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">hist</span><span class="p">):</span>
+                <span class="n">last</span> <span class="o">=</span> <span class="n">hist</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                <span class="n">f</span><span class="p">[</span><span class="s1">&#39;t_since_last_s&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">T</span> <span class="o">-</span> <span class="n">last</span><span class="p">[</span><span class="s1">&#39;event_time&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+                <span class="n">f</span><span class="p">[</span><span class="s1">&#39;last_speed&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">last</span><span class="p">[</span><span class="s1">&#39;speed&#39;</span><span class="p">]</span>
+                <span class="n">f</span><span class="p">[</span><span class="s1">&#39;last_lon&#39;</span><span class="p">],</span> <span class="n">f</span><span class="p">[</span><span class="s1">&#39;last_lat&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">last</span><span class="p">[</span><span class="s1">&#39;lon&#39;</span><span class="p">],</span> <span class="n">last</span><span class="p">[</span><span class="s1">&#39;lat&#39;</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">):</span>
+                    <span class="n">sp</span> <span class="o">=</span> <span class="n">hist</span><span class="p">[</span><span class="n">hist</span><span class="p">[</span><span class="s1">&#39;event_time&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">T</span> <span class="o">-</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="n">w</span><span class="p">)][</span><span class="s1">&#39;speed&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+                    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sp</span><span class="p">):</span>
+                        <span class="n">f</span><span class="p">[</span><span class="sa">f</span><span class="s1">&#39;speed_mean_</span><span class="si">{</span><span class="n">w</span><span class="si">}</span><span class="s1">m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sp</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+                        <span class="n">f</span><span class="p">[</span><span class="sa">f</span><span class="s1">&#39;speed_max_</span><span class="si">{</span><span class="n">w</span><span class="si">}</span><span class="s1">m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sp</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+                        <span class="n">f</span><span class="p">[</span><span class="sa">f</span><span class="s1">&#39;speed_std_</span><span class="si">{</span><span class="n">w</span><span class="si">}</span><span class="s1">m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sp</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sp</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mf">0.0</span>
+                        <span class="n">f</span><span class="p">[</span><span class="sa">f</span><span class="s1">&#39;stop_share_</span><span class="si">{</span><span class="n">w</span><span class="si">}</span><span class="s1">m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">sp</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+                <span class="n">h10</span> <span class="o">=</span> <span class="n">hist</span><span class="p">[</span><span class="n">hist</span><span class="p">[</span><span class="s1">&#39;event_time&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">T</span> <span class="o">-</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">10</span><span class="p">)]</span>
+                <span class="n">f</span><span class="p">[</span><span class="s1">&#39;dist_10m_m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">hav</span><span class="p">(</span><span class="n">h10</span><span class="p">[</span><span class="s1">&#39;lat&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">h10</span><span class="p">[</span><span class="s1">&#39;lon&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+                                            <span class="n">h10</span><span class="p">[</span><span class="s1">&#39;lat&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="n">h10</span><span class="p">[</span><span class="s1">&#39;lon&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">h10</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="mf">0.0</span>
+
+        <span class="n">s</span> <span class="o">=</span> <span class="n">sched_by_stop</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;target_stop_id&#39;</span><span class="p">]]</span>
+        <span class="n">f</span><span class="p">[</span><span class="s1">&#39;plan_seg_s&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">s</span><span class="p">[</span><span class="s1">&#39;plan_seg_s&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s1">&#39;last_lon&#39;</span> <span class="ow">in</span> <span class="n">f</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">pd</span><span class="o">.</span><span class="n">isna</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;last_lon&#39;</span><span class="p">)):</span>
+            <span class="n">f</span><span class="p">[</span><span class="s1">&#39;dist_to_target_m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">hav</span><span class="p">(</span><span class="n">f</span><span class="p">[</span><span class="s1">&#39;last_lat&#39;</span><span class="p">],</span> <span class="n">f</span><span class="p">[</span><span class="s1">&#39;last_lon&#39;</span><span class="p">],</span> <span class="n">s</span><span class="p">[</span><span class="s1">&#39;stop_lat&#39;</span><span class="p">],</span> <span class="n">s</span><span class="p">[</span><span class="s1">&#39;stop_lon&#39;</span><span class="p">]))</span>
+            <span class="n">time_left_s</span> <span class="o">=</span> <span class="nb">max</span><span class="p">((</span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;target_time_begin&#39;</span><span class="p">]</span> <span class="o">-</span> <span class="n">T</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">(),</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">f</span><span class="p">[</span><span class="s1">&#39;req_speed_kmh&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">f</span><span class="p">[</span><span class="s1">&#39;dist_to_target_m&#39;</span><span class="p">]</span> <span class="o">/</span> <span class="n">time_left_s</span> <span class="o">*</span> <span class="mf">3.6</span>
+            <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">):</span>
+                <span class="n">m</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;speed_mean_</span><span class="si">{</span><span class="n">w</span><span class="si">}</span><span class="s1">m&#39;</span><span class="p">)</span>
+                <span class="n">f</span><span class="p">[</span><span class="sa">f</span><span class="s1">&#39;eta_delay_</span><span class="si">{</span><span class="n">w</span><span class="si">}</span><span class="s1">m&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">f</span><span class="p">[</span><span class="s1">&#39;dist_to_target_m&#39;</span><span class="p">]</span> <span class="o">/</span> <span class="p">(</span><span class="n">m</span> <span class="o">/</span> <span class="mf">3.6</span><span class="p">)</span> <span class="o">-</span> <span class="n">time_left_s</span><span class="p">)</span> <span class="k">if</span> <span class="n">m</span> <span class="ow">and</span> <span class="n">m</span> <span class="o">&gt;</span> <span class="mf">0.5</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+        <span class="n">sch_tr</span> <span class="o">=</span> <span class="n">sched_sorted</span><span class="p">[</span><span class="n">sched_sorted</span><span class="p">[</span><span class="s1">&#39;tr_id&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">tr</span><span class="p">]</span>
+        <span class="n">f</span><span class="p">[</span><span class="s1">&#39;n_stops_between&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(((</span><span class="n">sch_tr</span><span class="p">[</span><span class="s1">&#39;time_begin&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">T</span><span class="p">)</span> <span class="o">&amp;</span>
+                                    <span class="p">(</span><span class="n">sch_tr</span><span class="p">[</span><span class="s1">&#39;time_begin&#39;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">r</span><span class="p">[</span><span class="s1">&#39;target_time_begin&#39;</span><span class="p">]))</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
+        <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s1">&#39;sample_id&#39;</span><span class="p">)</span></div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">lightgbm</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">lgb</span>
+    <span class="c1"># пример инференса на validate</span>
+    <span class="n">points</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../validate/points.csv&#39;</span><span class="p">)</span>
+    <span class="n">traffic</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../validate/traffic.csv&#39;</span><span class="p">)</span>
+    <span class="n">schedule</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../validate/schedule_plan.csv&#39;</span><span class="p">)</span>
+    <span class="n">feats</span> <span class="o">=</span> <span class="n">build_features</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">traffic</span><span class="p">,</span> <span class="n">schedule</span><span class="p">)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">lgb</span><span class="o">.</span><span class="n">Booster</span><span class="p">(</span><span class="n">model_file</span><span class="o">=</span><span class="s1">&#39;model.txt&#39;</span><span class="p">)</span>
+    <span class="n">preds</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">feats</span><span class="p">[</span><span class="n">FEATURES</span><span class="p">])</span>
+    <span class="n">sub</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;sample_id&#39;</span><span class="p">:</span> <span class="n">feats</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="s1">&#39;prediction&#39;</span><span class="p">:</span> <span class="n">preds</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">1</span><span class="p">)})</span>
+    <span class="n">sub</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="s1">&#39;submission.csv&#39;</span><span class="p">,</span> <span class="n">sep</span><span class="o">=</span><span class="s1">&#39;;&#39;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;submission.csv: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">sub</span><span class="p">)</span><span class="si">}</span><span class="s1"> строк&#39;</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, MTHack team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

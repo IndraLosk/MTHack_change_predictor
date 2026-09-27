@@ -1,0 +1,263 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>app.services.derived_features &mdash; MTHack_change_predictor 1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=f2a433a1"></script>
+      <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            MTHack_change_predictor
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Модули</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../modules/backend.html">Backend (FastAPI)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../modules/ml.html">ML-модуль (LightGBM-инференс)</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">MTHack_change_predictor</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">app.services.derived_features</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for app.services.derived_features</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Производные признаки парка по телеметрии и расписанию (без pandas, stdlib).&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">defaultdict</span>
+
+<span class="n">_R</span> <span class="o">=</span> <span class="mf">6371000.0</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_hav</span><span class="p">(</span><span class="n">lat1</span><span class="p">,</span> <span class="n">lon1</span><span class="p">,</span> <span class="n">lat2</span><span class="p">,</span> <span class="n">lon2</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Гаверсинусное расстояние между точками в метрах.&quot;&quot;&quot;</span>
+    <span class="n">p1a</span><span class="p">,</span> <span class="n">p1b</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lat1</span><span class="p">),</span> <span class="n">math</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lat2</span><span class="p">)</span>
+    <span class="n">dlat</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lat2</span> <span class="o">-</span> <span class="n">lat1</span><span class="p">)</span>
+    <span class="n">dlon</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="n">lon2</span> <span class="o">-</span> <span class="n">lon1</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">dlat</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span> <span class="o">+</span> <span class="n">math</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">p1a</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">p1b</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">dlon</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span>
+    <span class="k">return</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">_R</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">asin</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">a</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="build_routes">
+<a class="viewcode-back" href="../../../modules/backend.html#app.services.derived_features.build_routes">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_routes</span><span class="p">(</span><span class="n">schedule_stops_rows</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Группирует остановки по tr_id как [(lat, lon, time_begin), ...] (&gt;=2 шт).&quot;&quot;&quot;</span>
+    <span class="n">routes</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="nb">list</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">schedule_stops_rows</span><span class="p">:</span>
+        <span class="n">routes</span><span class="p">[</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;stop_lat&quot;</span><span class="p">],</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;stop_lon&quot;</span><span class="p">],</span> <span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;time_begin&quot;</span><span class="p">)))</span>
+    <span class="k">return</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">routes</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">}</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_route_metrics</span><span class="p">(</span><span class="n">lat</span><span class="p">,</span> <span class="n">lon</span><span class="p">,</span> <span class="n">pts</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Позиция точки на нити: (progress_m, route_len_m, next_stop_index, plan_next).&quot;&quot;&quot;</span>
+    <span class="n">cum</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">pts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">cum</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">cum</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">_hav</span><span class="p">(</span><span class="n">pts</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">pts</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">1</span><span class="p">],</span> <span class="n">pts</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">pts</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">][</span><span class="mi">1</span><span class="p">]))</span>
+    <span class="n">route_len</span> <span class="o">=</span> <span class="n">cum</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">best_dist</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+    <span class="n">best_stop</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="p">(</span><span class="n">slat</span><span class="p">,</span> <span class="n">slon</span><span class="p">,</span> <span class="n">_plan</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">pts</span><span class="p">):</span>
+        <span class="n">d</span> <span class="o">=</span> <span class="n">_hav</span><span class="p">(</span><span class="n">lat</span><span class="p">,</span> <span class="n">lon</span><span class="p">,</span> <span class="n">slat</span><span class="p">,</span> <span class="n">slon</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">d</span> <span class="o">&lt;</span> <span class="n">best_dist</span><span class="p">:</span>
+            <span class="n">best_dist</span><span class="p">,</span> <span class="n">best_stop</span> <span class="o">=</span> <span class="n">d</span><span class="p">,</span> <span class="n">i</span>
+
+    <span class="n">next_idx</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">best_stop</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">cum</span><span class="p">[</span><span class="n">best_stop</span><span class="p">],</span> <span class="n">route_len</span><span class="p">,</span> <span class="n">next_idx</span><span class="p">,</span> <span class="n">pts</span><span class="p">[</span><span class="n">next_idx</span><span class="p">][</span><span class="mi">2</span><span class="p">]</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_segment_speed</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">pts</span><span class="p">,</span> <span class="n">route_len</span><span class="p">,</span> <span class="n">last_progress_m</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Средняя скорость на текущем сегменте (вокруг последней позиции).&quot;&quot;&quot;</span>
+    <span class="n">seg_frac</span> <span class="o">=</span> <span class="n">last_progress_m</span> <span class="o">/</span> <span class="n">route_len</span> <span class="k">if</span> <span class="n">route_len</span> <span class="k">else</span> <span class="mf">0.0</span>
+    <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">seg_frac</span> <span class="o">-</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">),</span> <span class="nb">min</span><span class="p">(</span><span class="n">seg_frac</span> <span class="o">+</span> <span class="mf">0.1</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">speeds</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">samples</span><span class="p">:</span>
+        <span class="n">proj_m</span> <span class="o">=</span> <span class="n">_route_metrics</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;lon&quot;</span><span class="p">]),</span> <span class="n">pts</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">frac</span> <span class="o">=</span> <span class="n">proj_m</span> <span class="o">/</span> <span class="n">route_len</span> <span class="k">if</span> <span class="n">route_len</span> <span class="k">else</span> <span class="mf">0.0</span>
+        <span class="k">if</span> <span class="n">lo</span> <span class="o">&lt;=</span> <span class="n">frac</span> <span class="o">&lt;=</span> <span class="n">hi</span> <span class="ow">and</span> <span class="n">s</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;speed&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">speeds</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;speed&quot;</span><span class="p">]))</span>
+    <span class="k">return</span> <span class="nb">round</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="n">speeds</span><span class="p">)</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">speeds</span><span class="p">),</span> <span class="mi">2</span><span class="p">)</span> <span class="k">if</span> <span class="n">speeds</span> <span class="k">else</span> <span class="kc">None</span>
+
+
+<div class="viewcode-block" id="fleet_features">
+<a class="viewcode-back" href="../../../modules/backend.html#app.services.derived_features.fleet_features">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fleet_features</span><span class="p">(</span><span class="n">telemetry_rows</span><span class="p">,</span> <span class="n">schedule_stops_rows</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Считает признаки по каждому ТС: скорость, простой, позиция и отклонение.&quot;&quot;&quot;</span>
+    <span class="n">routes</span> <span class="o">=</span> <span class="n">build_routes</span><span class="p">(</span><span class="n">schedule_stops_rows</span><span class="p">)</span>
+    <span class="n">by_tr</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="nb">list</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">telemetry_rows</span><span class="p">:</span>
+        <span class="n">by_tr</span><span class="p">[</span><span class="n">t</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
+
+    <span class="n">out</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">tr_id</span><span class="p">,</span> <span class="n">samples</span> <span class="ow">in</span> <span class="n">by_tr</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">speeds</span> <span class="o">=</span> <span class="p">[</span><span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="s2">&quot;speed&quot;</span><span class="p">])</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">samples</span> <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;speed&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">speeds</span><span class="p">:</span>
+            <span class="k">continue</span>
+
+        <span class="n">avg_speed</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">speeds</span><span class="p">)</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">speeds</span><span class="p">)</span>
+        <span class="n">idle_share</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">speeds</span> <span class="k">if</span> <span class="n">s</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">)</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">speeds</span><span class="p">)</span>
+
+        <span class="n">last</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;event_time&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)))</span>
+        <span class="n">lat</span><span class="p">,</span> <span class="n">lon</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">last</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">last</span><span class="p">[</span><span class="s2">&quot;lon&quot;</span><span class="p">])</span>
+
+        <span class="n">item</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;tr_id&quot;</span><span class="p">:</span> <span class="n">tr_id</span><span class="p">,</span>
+            <span class="s2">&quot;n_points&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">),</span>
+            <span class="s2">&quot;avg_speed_kmh&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">avg_speed</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+            <span class="s2">&quot;idle_points&quot;</span><span class="p">:</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">speeds</span> <span class="k">if</span> <span class="n">s</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">),</span>
+            <span class="s2">&quot;idle_share&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">idle_share</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+        <span class="p">}</span>
+
+        <span class="n">pts</span> <span class="o">=</span> <span class="n">routes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">tr_id</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">pts</span><span class="p">:</span>
+            <span class="n">progress_m</span><span class="p">,</span> <span class="n">route_len</span><span class="p">,</span> <span class="n">next_idx</span><span class="p">,</span> <span class="n">plan_next</span> <span class="o">=</span> <span class="n">_route_metrics</span><span class="p">(</span><span class="n">lat</span><span class="p">,</span> <span class="n">lon</span><span class="p">,</span> <span class="n">pts</span><span class="p">)</span>
+            <span class="n">nlat</span><span class="p">,</span> <span class="n">nlon</span><span class="p">,</span> <span class="n">_nplan</span> <span class="o">=</span> <span class="n">pts</span><span class="p">[</span><span class="n">next_idx</span><span class="p">]</span>
+            <span class="n">dist_next_m</span> <span class="o">=</span> <span class="n">_hav</span><span class="p">(</span><span class="n">lat</span><span class="p">,</span> <span class="n">lon</span><span class="p">,</span> <span class="n">nlat</span><span class="p">,</span> <span class="n">nlon</span><span class="p">)</span>
+            <span class="n">item</span><span class="p">[</span><span class="s2">&quot;route_len_m&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">route_len</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">item</span><span class="p">[</span><span class="s2">&quot;route_progress_m&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">progress_m</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">item</span><span class="p">[</span><span class="s2">&quot;route_progress_frac&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">progress_m</span> <span class="o">/</span> <span class="n">route_len</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="k">if</span> <span class="n">route_len</span> <span class="k">else</span> <span class="kc">None</span>
+            <span class="n">item</span><span class="p">[</span><span class="s2">&quot;next_stop_index&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">next_idx</span>
+            <span class="n">item</span><span class="p">[</span><span class="s2">&quot;seg_speed_kmh&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">_segment_speed</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">pts</span><span class="p">,</span> <span class="n">route_len</span><span class="p">,</span> <span class="n">progress_m</span><span class="p">)</span>
+            <span class="n">item</span><span class="p">[</span><span class="s2">&quot;deviation_s&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">_deviation_s</span><span class="p">(</span><span class="n">dist_next_m</span><span class="p">,</span> <span class="n">plan_next</span><span class="p">,</span> <span class="n">avg_speed</span><span class="p">,</span> <span class="n">last</span><span class="p">)</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">out</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_deviation_s</span><span class="p">(</span><span class="n">dist_next_m</span><span class="p">,</span> <span class="n">plan_next</span><span class="p">,</span> <span class="n">avg_speed_kmh</span><span class="p">,</span> <span class="n">last</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Ожидаемое время до остановки минус плановый остаток (сек, +/- = позже/раньше).&quot;&quot;&quot;</span>
+    <span class="n">t_last</span> <span class="o">=</span> <span class="n">_parse_dt</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;event_time&quot;</span><span class="p">))</span>
+    <span class="n">t_plan</span> <span class="o">=</span> <span class="n">_parse_dt</span><span class="p">(</span><span class="n">plan_next</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">t_last</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">t_plan</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">avg_speed_kmh</span> <span class="ow">or</span> <span class="n">avg_speed_kmh</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">plan_remaining_s</span> <span class="o">=</span> <span class="p">(</span><span class="n">t_plan</span> <span class="o">-</span> <span class="n">t_last</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+    <span class="n">exp_remaining_s</span> <span class="o">=</span> <span class="n">dist_next_m</span> <span class="o">/</span> <span class="p">(</span><span class="n">avg_speed_kmh</span> <span class="o">/</span> <span class="mf">3.6</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">round</span><span class="p">(</span><span class="n">exp_remaining_s</span> <span class="o">-</span> <span class="n">plan_remaining_s</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_parse_dt</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Парсит &#39;YYYY-MM-DD HH:MM:SS[.f]&#39; в datetime; None при ошибке.&quot;&quot;&quot;</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">value</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">datetime</span><span class="o">.</span><span class="n">fromisoformat</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;Z&quot;</span><span class="p">,</span> <span class="s2">&quot;+00:00&quot;</span><span class="p">))</span>
+    <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+
+<div class="viewcode-block" id="whatif_add_vehicle">
+<a class="viewcode-back" href="../../../modules/backend.html#app.services.derived_features.whatif_add_vehicle">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">whatif_add_vehicle</span><span class="p">(</span><span class="n">schedule_stops_rows</span><span class="p">,</span> <span class="n">telemetry_rows</span><span class="p">,</span> <span class="n">tr_id</span><span class="p">,</span> <span class="n">add_vehicles</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Симулирует выпуск доп. ТС: интервалы и задержка «до/после».&quot;&quot;&quot;</span>
+    <span class="n">pts</span> <span class="o">=</span> <span class="n">build_routes</span><span class="p">(</span><span class="n">schedule_stops_rows</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">tr_id</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">pts</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">route_len</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span>
+        <span class="n">_hav</span><span class="p">(</span><span class="n">pts</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">pts</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">1</span><span class="p">],</span> <span class="n">pts</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">pts</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">][</span><span class="mi">1</span><span class="p">])</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">pts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">active</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">telemetry_rows</span> <span class="k">if</span> <span class="n">t</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">tr_id</span> <span class="ow">and</span> <span class="n">t</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;speed&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">speeds</span> <span class="o">=</span> <span class="p">[</span><span class="nb">float</span><span class="p">(</span><span class="n">t</span><span class="p">[</span><span class="s2">&quot;speed&quot;</span><span class="p">])</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">telemetry_rows</span> <span class="k">if</span> <span class="n">t</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">tr_id</span> <span class="ow">and</span> <span class="n">t</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;speed&quot;</span><span class="p">)]</span>
+    <span class="n">avg_speed</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="n">speeds</span><span class="p">)</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">speeds</span><span class="p">)</span> <span class="k">if</span> <span class="n">speeds</span> <span class="k">else</span> <span class="mf">25.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+
+    <span class="n">cycle_s</span> <span class="o">=</span> <span class="n">route_len</span> <span class="o">/</span> <span class="p">(</span><span class="n">avg_speed</span> <span class="o">/</span> <span class="mf">3.6</span><span class="p">)</span>
+    <span class="n">interval_before</span> <span class="o">=</span> <span class="n">cycle_s</span> <span class="o">/</span> <span class="n">active</span>
+    <span class="n">total_after</span> <span class="o">=</span> <span class="n">active</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">add_vehicles</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+    <span class="n">interval_after</span> <span class="o">=</span> <span class="n">cycle_s</span> <span class="o">/</span> <span class="n">total_after</span> <span class="k">if</span> <span class="n">total_after</span> <span class="k">else</span> <span class="n">interval_before</span>
+
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;tr_id&quot;</span><span class="p">:</span> <span class="n">tr_id</span><span class="p">,</span>
+        <span class="s2">&quot;route_len_m&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">route_len</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="s2">&quot;active_vehicles&quot;</span><span class="p">:</span> <span class="n">active</span><span class="p">,</span>
+        <span class="s2">&quot;add_vehicles&quot;</span><span class="p">:</span> <span class="n">add_vehicles</span><span class="p">,</span>
+        <span class="s2">&quot;avg_speed_kmh&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">avg_speed</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="s2">&quot;interval_before_s&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">interval_before</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="s2">&quot;interval_after_s&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">interval_after</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="s2">&quot;delay_before_s&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">interval_before</span> <span class="o">*</span> <span class="mf">0.4</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="s2">&quot;delay_after_s&quot;</span><span class="p">:</span> <span class="nb">round</span><span class="p">(</span><span class="n">interval_after</span> <span class="o">*</span> <span class="mf">0.4</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+    <span class="p">}</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, MTHack team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

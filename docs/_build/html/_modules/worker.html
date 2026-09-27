@@ -1,0 +1,542 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>worker &mdash; MTHack_change_predictor 1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=f2a433a1"></script>
+      <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            MTHack_change_predictor
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Модули</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../modules/backend.html">Backend (FastAPI)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../modules/ml.html">ML-модуль (LightGBM-инференс)</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">MTHack_change_predictor</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Module code</a></li>
+      <li class="breadcrumb-item active">worker</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for worker</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;ML-воркер: инференс через общую БД&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">features</span><span class="w"> </span><span class="kn">import</span> <span class="n">FEATURES</span><span class="p">,</span> <span class="n">build_features</span>  <span class="c1"># пайплайн признаков</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">model_service</span><span class="w"> </span><span class="kn">import</span> <span class="n">model</span>  <span class="c1"># singleton: грузится один раз</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">map_matching</span><span class="w"> </span><span class="kn">import</span> <span class="n">MapMatcher</span><span class="p">,</span> <span class="n">decode_geom</span>  <span class="c1"># Map Matching (доп. фича ТЗ)</span>
+
+<span class="n">DB_DSN</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span>
+    <span class="s2">&quot;DB_DSN&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;postgresql://mthack:mthack@db:5432/mthack&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">POINTS_CSV</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;POINTS_CSV&quot;</span><span class="p">,</span> <span class="s2">&quot;/app/data/points.csv&quot;</span><span class="p">)</span>
+<span class="n">SCHEDULE_CSV</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;SCHEDULE_CSV&quot;</span><span class="p">,</span> <span class="s2">&quot;/app/data/schedule_plan.csv&quot;</span><span class="p">)</span>
+<span class="n">TRAFFIC_CSV</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;TRAFFIC_CSV&quot;</span><span class="p">,</span> <span class="s2">&quot;/app/data/traffic.csv&quot;</span><span class="p">)</span>
+
+<span class="n">INTERVAL</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;INTERVAL&quot;</span><span class="p">,</span> <span class="s2">&quot;20&quot;</span><span class="p">))</span>
+<span class="n">TELEMETRY_LIMIT</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;TELEMETRY_LIMIT&quot;</span><span class="p">,</span> <span class="s2">&quot;200000&quot;</span><span class="p">))</span>
+<span class="n">STALE_AFTER_SECONDS</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;STALE_AFTER_SECONDS&quot;</span><span class="p">,</span> <span class="s2">&quot;45&quot;</span><span class="p">))</span>
+
+<span class="n">LIVE_WINDOW_MIN</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;LIVE_WINDOW_MIN&quot;</span><span class="p">,</span> <span class="s2">&quot;10&quot;</span><span class="p">))</span>
+<span class="n">LIVE_WINDOW_MAX</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;LIVE_WINDOW_MAX&quot;</span><span class="p">,</span> <span class="s2">&quot;15&quot;</span><span class="p">))</span>
+<span class="n">LIVE_MAX_VEHICLES</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;LIVE_MAX_VEHICLES&quot;</span><span class="p">,</span> <span class="s2">&quot;200&quot;</span><span class="p">))</span>
+
+<span class="n">DDL</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">CREATE TABLE IF NOT EXISTS ndtp_telemetry (</span>
+<span class="s2">    id BIGSERIAL PRIMARY KEY,</span>
+<span class="s2">    packet_id TEXT,</span>
+<span class="s2">    tr_id TEXT,</span>
+<span class="s2">    unit_id TEXT,</span>
+<span class="s2">    event_time TEXT,</span>
+<span class="s2">    device_event_id TEXT,</span>
+<span class="s2">    location_valid BOOLEAN,</span>
+<span class="s2">    gps_time TEXT,</span>
+<span class="s2">    lon DOUBLE PRECISION,</span>
+<span class="s2">    lat DOUBLE PRECISION,</span>
+<span class="s2">    alt DOUBLE PRECISION,</span>
+<span class="s2">    speed DOUBLE PRECISION,</span>
+<span class="s2">    heading DOUBLE PRECISION,</span>
+<span class="s2">    receive_time TIMESTAMPTZ,</span>
+<span class="s2">    is_hist_data BOOLEAN</span>
+<span class="s2">);</span>
+<span class="s2">CREATE TABLE IF NOT EXISTS predictions (</span>
+<span class="s2">    sample_id TEXT PRIMARY KEY,</span>
+<span class="s2">    prediction DOUBLE PRECISION</span>
+<span class="s2">);</span>
+<span class="s2">CREATE TABLE IF NOT EXISTS forecast_points (</span>
+<span class="s2">    sample_id TEXT PRIMARY KEY,</span>
+<span class="s2">    tr_id TEXT,</span>
+<span class="s2">    T TEXT,</span>
+<span class="s2">    target_stop_id TEXT,</span>
+<span class="s2">    target_time_begin TEXT,</span>
+<span class="s2">    cur_dev_s DOUBLE PRECISION</span>
+<span class="s2">);</span>
+<span class="s2">CREATE TABLE IF NOT EXISTS schedule_stops (</span>
+<span class="s2">    tt_action_item_id TEXT PRIMARY KEY,</span>
+<span class="s2">    time_begin TEXT,</span>
+<span class="s2">    tr_id TEXT,</span>
+<span class="s2">    geom TEXT</span>
+<span class="s2">);</span>
+<span class="s2">CREATE TABLE IF NOT EXISTS route_features (</span>
+<span class="s2">    id BIGSERIAL PRIMARY KEY,</span>
+<span class="s2">    tr_id TEXT,</span>
+<span class="s2">    event_time TEXT,</span>
+<span class="s2">    lat DOUBLE PRECISION,</span>
+<span class="s2">    lon DOUBLE PRECISION,</span>
+<span class="s2">    speed DOUBLE PRECISION,</span>
+<span class="s2">    heading DOUBLE PRECISION,</span>
+<span class="s2">    matched_lat DOUBLE PRECISION,</span>
+<span class="s2">    matched_lon DOUBLE PRECISION,</span>
+<span class="s2">    route_progress_m DOUBLE PRECISION,</span>
+<span class="s2">    route_progress_frac DOUBLE PRECISION,</span>
+<span class="s2">    dist_to_route_m DOUBLE PRECISION,</span>
+<span class="s2">    seg_index INTEGER</span>
+<span class="s2">);</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+
+<div class="viewcode-block" id="load_csv">
+<a class="viewcode-back" href="../modules/ml.html#worker.load_csv">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_csv</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="init_db">
+<a class="viewcode-back" href="../modules/ml.html#worker.init_db">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">init_db</span><span class="p">(</span><span class="n">conn</span><span class="p">):</span>
+    <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">DDL</span><span class="p">)</span>
+    <span class="c1"># Postgres не поддерживает ADD COLUMN IF NOT EXISTS в DDL — добавляем колонку безопасно</span>
+    <span class="n">has</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetchval</span><span class="p">(</span>
+        <span class="s2">&quot;SELECT 1 FROM information_schema.columns &quot;</span>
+        <span class="s2">&quot;WHERE table_name=&#39;predictions&#39; AND column_name=&#39;stale&#39;&quot;</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">has</span><span class="p">:</span>
+        <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="s2">&quot;ALTER TABLE predictions ADD COLUMN stale BOOLEAN DEFAULT false&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="seed_static">
+<a class="viewcode-back" href="../modules/ml.html#worker.seed_static">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">seed_static</span><span class="p">(</span><span class="n">conn</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Заполняет таблицы forecast_points/schedule_stops из CSV, если пусты.&quot;&quot;&quot;</span>
+    <span class="n">n_points</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetchval</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) FROM forecast_points&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">n_points</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">POINTS_CSV</span><span class="p">):</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">POINTS_CSV</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+            <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+                <span class="s2">&quot;INSERT INTO forecast_points (sample_id,tr_id,T,target_stop_id,target_time_begin,cur_dev_s) VALUES ($1,$2,$3,$4,$5,$6)&quot;</span><span class="p">,</span>
+                <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;sample_id&quot;</span><span class="p">]),</span> <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]),</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;T&quot;</span><span class="p">],</span> <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;target_stop_id&quot;</span><span class="p">]),</span>
+                <span class="n">r</span><span class="p">[</span><span class="s2">&quot;target_time_begin&quot;</span><span class="p">],</span> <span class="nb">float</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;cur_dev_s&quot;</span><span class="p">]),</span>
+            <span class="p">)</span>
+
+    <span class="n">n_sched</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetchval</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) FROM schedule_stops&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">n_sched</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">SCHEDULE_CSV</span><span class="p">):</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">SCHEDULE_CSV</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+            <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+                <span class="s2">&quot;INSERT INTO schedule_stops (tt_action_item_id,time_begin,tr_id,geom) VALUES ($1,$2,$3,$4)&quot;</span><span class="p">,</span>
+                <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tt_action_item_id&quot;</span><span class="p">]),</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">],</span> <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]),</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;geom&quot;</span><span class="p">],</span>
+            <span class="p">)</span>
+
+    <span class="n">has_tele</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetchval</span><span class="p">(</span>
+        <span class="s2">&quot;SELECT count(*) FROM ndtp_telemetry WHERE tr_id IN (SELECT DISTINCT tr_id FROM forecast_points)&quot;</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">has_tele</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">TRAFFIC_CSV</span><span class="p">):</span>
+        <span class="n">ids</span> <span class="o">=</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">])</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">POINTS_CSV</span><span class="p">)</span><span class="o">.</span><span class="n">iterrows</span><span class="p">()}</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">TRAFFIC_CSV</span><span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">ids</span><span class="p">)]</span>
+        <span class="n">inserted</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+            <span class="n">recv</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">fromisoformat</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;receive_time&quot;</span><span class="p">]))</span> <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">notna</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;receive_time&quot;</span><span class="p">])</span> <span class="k">else</span> <span class="kc">None</span>
+            <span class="n">gps</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span> <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">isna</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;gps_time&quot;</span><span class="p">])</span> <span class="k">else</span> <span class="n">r</span><span class="p">[</span><span class="s2">&quot;gps_time&quot;</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;lon&quot;</span><span class="p">,</span> <span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;alt&quot;</span><span class="p">,</span> <span class="s2">&quot;speed&quot;</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">pd</span><span class="o">.</span><span class="n">isna</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="n">col</span><span class="p">]):</span>
+                    <span class="n">r</span> <span class="o">=</span> <span class="n">r</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+                    <span class="n">r</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">                    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                    INSERT INTO ndtp_telemetry</span>
+<span class="sd">                        (packet_id,tr_id,unit_id,event_time,device_event_id,location_valid,</span>
+<span class="sd">                         gps_time,lon,lat,alt,speed,heading,receive_time,is_hist_data)</span>
+<span class="sd">                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)</span>
+<span class="sd">                    &quot;&quot;&quot;</span><span class="p">,</span>
+                    <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;packet_id&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">),</span> <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]),</span> <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;unit_id&quot;</span><span class="p">]</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+                    <span class="n">r</span><span class="p">[</span><span class="s2">&quot;event_time&quot;</span><span class="p">],</span> <span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;device_event_id&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="mi">0</span><span class="p">),</span>
+                    <span class="nb">bool</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;location_valid&quot;</span><span class="p">]),</span> <span class="n">gps</span><span class="p">,</span>
+                    <span class="nb">float</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;lon&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;alt&quot;</span><span class="p">]),</span>
+                    <span class="nb">float</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;speed&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;heading&quot;</span><span class="p">]),</span> <span class="n">recv</span><span class="p">,</span>
+                    <span class="nb">bool</span><span class="p">(</span><span class="n">r</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;is_hist_data&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)),</span>
+                <span class="p">)</span>
+                <span class="n">inserted</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                <span class="k">continue</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[worker] залито телеметрии: </span><span class="si">{</span><span class="n">inserted</span><span class="si">}</span><span class="s2"> строк&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="fetchtab">
+<a class="viewcode-back" href="../modules/ml.html#worker.fetchtab">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetchtab</span><span class="p">(</span><span class="n">conn</span><span class="p">,</span> <span class="n">sql</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Выполнить SELECT и вернуть строки как list[dict] (для pandas).&quot;&quot;&quot;</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetch</span><span class="p">(</span><span class="n">sql</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">[</span><span class="nb">dict</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">]</span></div>
+
+
+
+<div class="viewcode-block" id="map_match_telemetry">
+<a class="viewcode-back" href="../modules/ml.html#worker.map_match_telemetry">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">map_match_telemetry</span><span class="p">(</span><span class="n">conn</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Map Matching: проецирует телеметрию на нить маршрута в route_features.&quot;&quot;&quot;</span>
+    <span class="n">sched</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span><span class="n">conn</span><span class="p">,</span> <span class="s2">&quot;SELECT tr_id, geom FROM schedule_stops&quot;</span><span class="p">)</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">OrderedDict</span>
+    <span class="n">order</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">]]</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">sched</span><span class="p">:</span>
+        <span class="n">order</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">],</span> <span class="p">[])</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">decode_geom</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;geom&quot;</span><span class="p">]))</span>
+    <span class="n">has_route</span> <span class="o">=</span> <span class="p">[</span><span class="n">tr</span> <span class="k">for</span> <span class="n">tr</span><span class="p">,</span> <span class="n">stops</span> <span class="ow">in</span> <span class="n">order</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">stops</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">]</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">has_route</span><span class="p">:</span>
+        <span class="k">return</span>
+
+    <span class="n">recent</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span>
+        <span class="n">conn</span><span class="p">,</span>
+        <span class="s2">&quot;SELECT tr_id, event_time, lat, lon, speed, heading &quot;</span>
+        <span class="s2">&quot;FROM ndtp_telemetry WHERE location_valid AND tr_id = ANY($1) &quot;</span>
+        <span class="s2">&quot;ORDER BY id DESC LIMIT 1500&quot;</span><span class="p">,</span>
+        <span class="n">has_route</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">recent</span><span class="p">:</span>
+        <span class="k">return</span>
+
+    <span class="n">written</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">tr</span> <span class="ow">in</span> <span class="n">has_route</span><span class="p">:</span>
+        <span class="n">mm</span> <span class="o">=</span> <span class="n">MapMatcher</span><span class="p">(</span><span class="n">order</span><span class="p">[</span><span class="n">tr</span><span class="p">])</span>
+        <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">recent</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">tr</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="n">mm</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">],</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;lon&quot;</span><span class="p">],</span> <span class="n">heading</span><span class="o">=</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;heading&quot;</span><span class="p">],</span> <span class="n">speed</span><span class="o">=</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;speed&quot;</span><span class="p">])</span>
+                <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">                    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                    INSERT INTO route_features</span>
+<span class="sd">                        (tr_id,event_time,lat,lon,speed,heading,</span>
+<span class="sd">                         matched_lat,matched_lon,route_progress_m,route_progress_frac,</span>
+<span class="sd">                         dist_to_route_m,seg_index)</span>
+<span class="sd">                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)</span>
+<span class="sd">                    &quot;&quot;&quot;</span><span class="p">,</span>
+                    <span class="n">tr</span><span class="p">,</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;event_time&quot;</span><span class="p">],</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">],</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;lon&quot;</span><span class="p">],</span> <span class="n">p</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;speed&quot;</span><span class="p">),</span>
+                    <span class="n">p</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;heading&quot;</span><span class="p">),</span> <span class="n">res</span><span class="p">[</span><span class="s2">&quot;matched_lat&quot;</span><span class="p">],</span> <span class="n">res</span><span class="p">[</span><span class="s2">&quot;matched_lon&quot;</span><span class="p">],</span>
+                    <span class="n">res</span><span class="p">[</span><span class="s2">&quot;route_progress_m&quot;</span><span class="p">],</span> <span class="n">res</span><span class="p">[</span><span class="s2">&quot;route_progress_frac&quot;</span><span class="p">],</span>
+                    <span class="n">res</span><span class="p">[</span><span class="s2">&quot;dist_to_route_m&quot;</span><span class="p">],</span> <span class="n">res</span><span class="p">[</span><span class="s2">&quot;seg_index&quot;</span><span class="p">],</span>
+                <span class="p">)</span>
+                <span class="n">written</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+                <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">written</span><span class="p">:</span>
+            <span class="k">break</span>  <span class="c1"># за один цикл достаточно одной машины (демонстрация контура)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[mapmatch] записано </span><span class="si">{</span><span class="n">written</span><span class="si">}</span><span class="s2"> записей Map Matching&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_current_dev_s</span><span class="p">(</span><span class="n">grp_sched</span><span class="p">,</span> <span class="n">last</span><span class="p">,</span> <span class="n">now_naive</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Оценка текущего отклонения ТС: задержка на последней уже пройденной остановке.&quot;&quot;&quot;</span>
+    <span class="n">pts</span> <span class="o">=</span> <span class="p">[</span><span class="n">decode_geom</span><span class="p">(</span><span class="n">g</span><span class="p">)</span> <span class="k">for</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">grp_sched</span><span class="p">[</span><span class="s2">&quot;geom&quot;</span><span class="p">]]</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">pts</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+    <span class="n">mm</span> <span class="o">=</span> <span class="n">MapMatcher</span><span class="p">(</span><span class="n">pts</span><span class="p">)</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">mm</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">last</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">last</span><span class="p">[</span><span class="s2">&quot;lon&quot;</span><span class="p">]))</span>
+    <span class="n">prog</span> <span class="o">=</span> <span class="n">res</span><span class="p">[</span><span class="s2">&quot;route_progress_m&quot;</span><span class="p">]</span>
+    <span class="n">offsets</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">pts</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">offsets</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">offsets</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">mm</span><span class="o">.</span><span class="n">seg_len</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+    <span class="n">times</span> <span class="o">=</span> <span class="n">grp_sched</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+    <span class="n">last_passed</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">off</span><span class="p">,</span> <span class="n">tb</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">offsets</span><span class="p">,</span> <span class="n">times</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">off</span> <span class="o">&lt;=</span> <span class="n">prog</span> <span class="o">+</span> <span class="mf">5.0</span><span class="p">:</span>
+            <span class="n">last_passed</span> <span class="o">=</span> <span class="n">tb</span>
+    <span class="k">if</span> <span class="n">last_passed</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">pd</span><span class="o">.</span><span class="n">isna</span><span class="p">(</span><span class="n">last_passed</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">now_naive</span> <span class="o">-</span> <span class="n">last_passed</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="live_early_warning">
+<a class="viewcode-back" href="../modules/ml.html#worker.live_early_warning">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">live_early_warning</span><span class="p">(</span><span class="n">conn</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Живое раннее оповещение на потоке.</span>
+
+<span class="sd">    Для каждого активного ТС ищет ближайшую плановую остановку из schedule_stops,</span>
+<span class="sd">    чьё плановое прибытие попадает в окно T+10..15 мин (горизонт из ТЗ), собирает</span>
+<span class="sd">    те же 24 признака (features.build_features, только данные на момент T) и сразу</span>
+<span class="sd">    пишет прогноз задержки в predictions. Прогноз подписан: &#39;+&#39; =&gt; опоздание,</span>
+<span class="sd">    &#39;-&#39; =&gt; опережение.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">model</span><span class="o">.</span><span class="n">ready</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[live] модель не загружена: </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="n">now_utc</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+    <span class="n">now_naive</span> <span class="o">=</span> <span class="n">now_utc</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">tzinfo</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+    <span class="n">T_dt</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">now_naive</span><span class="p">)</span>
+    <span class="n">lo</span> <span class="o">=</span> <span class="n">T_dt</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="n">LIVE_WINDOW_MIN</span><span class="p">)</span>
+    <span class="n">hi</span> <span class="o">=</span> <span class="n">T_dt</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="n">LIVE_WINDOW_MAX</span><span class="p">)</span>
+
+    <span class="n">sched</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span>
+        <span class="n">conn</span><span class="p">,</span> <span class="s2">&quot;SELECT tt_action_item_id, time_begin, tr_id, geom FROM schedule_stops&quot;</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">sched</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="k">return</span>
+    <span class="n">sched</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">sched</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">])</span>
+    <span class="n">sched</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sched</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+
+    <span class="n">active</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span>
+        <span class="n">conn</span><span class="p">,</span> <span class="s2">&quot;SELECT DISTINCT tr_id FROM ndtp_telemetry WHERE location_valid&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">active</span><span class="p">:</span>
+        <span class="k">return</span>
+    <span class="n">active_ids</span> <span class="o">=</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">r</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">])</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">active</span><span class="p">}</span>
+    <span class="n">sched</span> <span class="o">=</span> <span class="n">sched</span><span class="p">[</span><span class="n">sched</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">active_ids</span><span class="p">)]</span>
+    <span class="k">if</span> <span class="n">sched</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="k">return</span>
+
+    <span class="n">nxt</span> <span class="o">=</span> <span class="n">sched</span><span class="p">[(</span><span class="n">sched</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">lo</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">sched</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">hi</span><span class="p">)]</span>
+
+    <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">tr</span><span class="p">,</span> <span class="n">grp</span> <span class="ow">in</span> <span class="n">nxt</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;tr_id&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">LIVE_MAX_VEHICLES</span><span class="p">:</span>
+            <span class="k">break</span>
+        <span class="n">cand</span> <span class="o">=</span> <span class="n">grp</span><span class="o">.</span><span class="n">nsmallest</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;time_begin&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># ближайшая в окне T+10..15 мин</span>
+        <span class="n">grp_sched</span> <span class="o">=</span> <span class="n">sched</span><span class="p">[</span><span class="n">sched</span><span class="p">[</span><span class="s2">&quot;tr_id&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">tr</span><span class="p">]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;time_begin&quot;</span><span class="p">)</span>
+
+        <span class="n">tele_tr</span> <span class="o">=</span> <span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span>
+            <span class="n">conn</span><span class="p">,</span>
+            <span class="s2">&quot;SELECT event_time, location_valid, lon, lat, speed, heading &quot;</span>
+            <span class="s2">&quot;FROM ndtp_telemetry WHERE tr_id = $1 AND location_valid &quot;</span>
+            <span class="s2">&quot;ORDER BY id DESC LIMIT 1&quot;</span><span class="p">,</span>
+            <span class="n">tr</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">tele_tr</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">last</span> <span class="o">=</span> <span class="n">tele_tr</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">cur_dev</span> <span class="o">=</span> <span class="n">_current_dev_s</span><span class="p">(</span><span class="n">grp_sched</span><span class="p">,</span> <span class="n">last</span><span class="p">,</span> <span class="n">now_naive</span><span class="p">)</span>
+        <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span>
+            <span class="s2">&quot;sample_id&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;live_</span><span class="si">{</span><span class="n">tr</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>                       <span class="c1"># стабильный id: текущий алерт по ТС</span>
+            <span class="s2">&quot;tr_id&quot;</span><span class="p">:</span> <span class="n">tr</span><span class="p">,</span>
+            <span class="s2">&quot;T&quot;</span><span class="p">:</span> <span class="n">now_naive</span><span class="p">,</span>
+            <span class="s2">&quot;target_stop_id&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">cand</span><span class="p">[</span><span class="s2">&quot;tt_action_item_id&quot;</span><span class="p">]),</span>
+            <span class="s2">&quot;target_time_begin&quot;</span><span class="p">:</span> <span class="n">cand</span><span class="p">[</span><span class="s2">&quot;time_begin&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;cur_dev_s&quot;</span><span class="p">:</span> <span class="n">cur_dev</span><span class="p">,</span>
+        <span class="p">})</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">rows</span><span class="p">:</span>
+        <span class="k">return</span>
+
+    <span class="n">points</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>
+    <span class="n">tele</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span>
+        <span class="n">conn</span><span class="p">,</span>
+        <span class="s2">&quot;SELECT event_time, tr_id, location_valid, lon, lat, speed &quot;</span>
+        <span class="s2">&quot;FROM ndtp_telemetry ORDER BY id DESC LIMIT $1&quot;</span><span class="p">,</span>
+        <span class="n">TELEMETRY_LIMIT</span><span class="p">,</span>
+    <span class="p">))</span>
+
+    <span class="n">_t0</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>                       <span class="c1"># метрика latency (критерий 5)</span>
+    <span class="n">feats</span> <span class="o">=</span> <span class="n">build_features</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">tele</span><span class="p">,</span> <span class="n">sched</span><span class="p">)</span>
+    <span class="n">preds</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">booster</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">feats</span><span class="p">[</span><span class="n">FEATURES</span><span class="p">])</span>
+    <span class="n">infer_ms</span> <span class="o">=</span> <span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">_t0</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1000.0</span>
+
+    <span class="n">now</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+    <span class="n">last_received</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetchval</span><span class="p">(</span><span class="s2">&quot;SELECT MAX(receive_time) FROM ndtp_telemetry&quot;</span><span class="p">)</span>
+    <span class="n">stale</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="k">if</span> <span class="n">last_received</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">lr</span> <span class="o">=</span> <span class="n">last_received</span> <span class="k">if</span> <span class="n">last_received</span><span class="o">.</span><span class="n">tzinfo</span> <span class="k">else</span> <span class="n">last_received</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">tzinfo</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+        <span class="n">stale</span> <span class="o">=</span> <span class="p">(</span><span class="n">now</span> <span class="o">-</span> <span class="n">lr</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">&gt;</span> <span class="n">STALE_AFTER_SECONDS</span>
+
+    <span class="n">n_late</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">sid</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">feats</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">preds</span><span class="p">):</span>
+        <span class="n">pred</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">pred</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">n_late</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">            </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            INSERT INTO predictions (sample_id, prediction, stale)</span>
+<span class="sd">            VALUES ($1, $2, $3)</span>
+<span class="sd">            ON CONFLICT (sample_id) DO UPDATE</span>
+<span class="sd">                SET prediction = EXCLUDED.prediction, stale = EXCLUDED.stale</span>
+<span class="sd">            &quot;&quot;&quot;</span><span class="p">,</span>
+            <span class="nb">str</span><span class="p">(</span><span class="n">sid</span><span class="p">),</span> <span class="n">pred</span><span class="p">,</span> <span class="n">stale</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;[live] алертов=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">preds</span><span class="p">)</span><span class="si">}</span><span class="s2"> опозданий=</span><span class="si">{</span><span class="n">n_late</span><span class="si">}</span><span class="s2"> ранних=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">preds</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">n_late</span><span class="si">}</span><span class="s2"> &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;stale=</span><span class="si">{</span><span class="n">stale</span><span class="si">}</span><span class="s2"> latency=</span><span class="si">{</span><span class="n">infer_ms</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">ms &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">infer_ms</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">preds</span><span class="p">)</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">ms/алерт если&gt;0)&quot;</span><span class="p">,</span>
+        <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="infer">
+<a class="viewcode-back" href="../modules/ml.html#worker.infer">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">infer</span><span class="p">(</span><span class="n">conn</span><span class="p">):</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">model</span><span class="o">.</span><span class="n">ready</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[worker] модель не загружена: </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="n">points</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span><span class="n">conn</span><span class="p">,</span> <span class="s2">&quot;SELECT * FROM forecast_points&quot;</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">points</span><span class="o">.</span><span class="n">empty</span><span class="p">:</span>
+        <span class="k">return</span>
+    <span class="n">points</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;t&quot;</span><span class="p">:</span> <span class="s2">&quot;T&quot;</span><span class="p">},</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">schedule</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span><span class="n">conn</span><span class="p">,</span> <span class="s2">&quot;SELECT * FROM schedule_stops&quot;</span><span class="p">))</span>
+
+    <span class="n">tele</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+        <span class="k">await</span> <span class="n">fetchtab</span><span class="p">(</span>
+            <span class="n">conn</span><span class="p">,</span>
+            <span class="s2">&quot;SELECT event_time, tr_id, location_valid, lon, lat, speed &quot;</span>
+            <span class="s2">&quot;FROM ndtp_telemetry ORDER BY id DESC LIMIT $1&quot;</span><span class="p">,</span>
+            <span class="n">TELEMETRY_LIMIT</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="c1"># --- деградация: определяем свежесть последнего принятого пакета ---</span>
+    <span class="n">last_received</span> <span class="o">=</span> <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">fetchval</span><span class="p">(</span>
+        <span class="s2">&quot;SELECT MAX(receive_time) FROM ndtp_telemetry&quot;</span>
+    <span class="p">)</span>
+    <span class="n">stale</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="k">if</span> <span class="n">last_received</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">now</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+        <span class="n">last</span> <span class="o">=</span> <span class="n">last_received</span> <span class="k">if</span> <span class="n">last_received</span><span class="o">.</span><span class="n">tzinfo</span> <span class="k">else</span> <span class="n">last_received</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">tzinfo</span><span class="o">=</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span>
+        <span class="n">age</span> <span class="o">=</span> <span class="p">(</span><span class="n">now</span> <span class="o">-</span> <span class="n">last</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+        <span class="n">stale</span> <span class="o">=</span> <span class="n">age</span> <span class="o">&gt;</span> <span class="n">STALE_AFTER_SECONDS</span>
+    <span class="k">if</span> <span class="n">stale</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[worker] поток молчит &gt;</span><span class="si">{</span><span class="n">STALE_AFTER_SECONDS</span><span class="si">}</span><span class="s2">s — прогноз по последним данным (stale)&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">feats</span> <span class="o">=</span> <span class="n">build_features</span><span class="p">(</span><span class="n">points</span><span class="p">,</span> <span class="n">tele</span><span class="p">,</span> <span class="n">schedule</span><span class="p">)</span>
+    <span class="n">preds</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">booster</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">feats</span><span class="p">[</span><span class="n">FEATURES</span><span class="p">])</span>
+    <span class="k">for</span> <span class="n">sid</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">feats</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">preds</span><span class="p">):</span>
+        <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+<span class="w">            </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            INSERT INTO predictions (sample_id, prediction, stale)</span>
+<span class="sd">            VALUES ($1, $2, $3)</span>
+<span class="sd">            ON CONFLICT (sample_id) DO UPDATE</span>
+<span class="sd">                SET prediction = EXCLUDED.prediction, stale = EXCLUDED.stale</span>
+<span class="sd">            &quot;&quot;&quot;</span><span class="p">,</span>
+            <span class="nb">str</span><span class="p">(</span><span class="n">sid</span><span class="p">),</span> <span class="nb">float</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="mi">1</span><span class="p">)),</span> <span class="n">stale</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[worker] записано </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">preds</span><span class="p">)</span><span class="si">}</span><span class="s2"> предсказаний (stale=</span><span class="si">{</span><span class="n">stale</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="main">
+<a class="viewcode-back" href="../modules/ml.html#worker.main">[docs]</a>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">():</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">asyncpg</span><span class="w"> </span><span class="kn">import</span> <span class="n">connect</span>
+
+    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">conn</span> <span class="o">=</span> <span class="k">await</span> <span class="n">connect</span><span class="p">(</span><span class="n">DB_DSN</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">init_db</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">seed_static</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">infer</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">live_early_warning</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">map_match_telemetry</span><span class="p">(</span><span class="n">conn</span><span class="p">)</span>
+            <span class="k">await</span> <span class="n">conn</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[worker] ошибка: </span><span class="si">{</span><span class="n">exc</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">INTERVAL</span><span class="p">)</span></div>
+
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+    <span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+        <span class="k">pass</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, MTHack team.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

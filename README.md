@@ -131,28 +131,102 @@ FastAPI, Swagger/OpenAPI на `http://localhost:8000/docs`.
 
 ## Запуск
 
-Требования: **Docker**, **Make** (или команды `docker compose`).
+### Требования
 
-```bash
-# 1) Один раз: загрузить образ эмулятора NDTP из локального файла
-make setup
+- **Docker Desktop** (Windows/Mac) или Docker Engine + Compose (Linux);
+- **Make** — опционально (можно вместо него запускать команды `docker compose` напрямую);
+- ~4 ГБ свободного места на диске (образы + данные).
 
-# 2) Собрать и поднять все контейнеры
-make up
+### Шаг 1. Получить датасет
+
+Датасет лежит в `dataset/` в корне проекта. Если каких-то файлов нет (например, при
+клоне из git тяжёлые файлы могли не приехать), скачайте полный набор по ссылке:
+
+> **https://drive.google.com/drive/folders/1LV_ge2XcOZWHD9RLR1qhcY8jzv-B8Toa**
+
+Скачанные файлы должны лежать так:
+
+```
+dataset/
+├── ndtp-telemetry-emulator.tar     ← образ эмулятора (обязателен для make setup)
+├── train/traffic.csv, schedule.csv
+├── test/traffic.csv, schedule.csv
+├── validate/traffic.csv, schedule_plan.csv, points.csv
+├── labels/labels_train.csv, labels_test.csv
+└── sample_submission.csv
 ```
 
-Без Make — эквивалент:
+**Проверка, что данные на месте** (файлы должны быть непустыми):
 
 ```bash
+# в PowerShell
+Get-ChildItem dataset/validate
+```
+Ожидается: `points.csv (~12 КБ)`, `schedule_plan.csv (~680 КБ)`, `traffic.csv (~17 МБ)`.
+Если `traffic.csv` или `schedule_plan.csv` пусты/отсутствуют — доскачайте их, иначе
+воркер не сможет построить расписание и прогнозы.
+
+### Шаг 2. Загрузить образ эмулятора (один раз)
+
+```bash
+make setup
+```
+Это идемпотентно: команда проверяет, загружен ли образ `ndtp-telemetry-emulator:1.0`,
+и загружает его из `dataset/ndtp-telemetry-emulator.tar` только если его нет.
+
+Без Make:
+```bash
 docker load -i dataset/ndtp-telemetry-emulator.tar
+```
+
+### Шаг 3. Поднять систему
+
+```bash
+make up
+```
+Эквивалент без Make:
+```bash
 docker compose up -d --build
 ```
 
-Что происходит автоматически при `make up`:
+Что происходит автоматически:
 1. поднимаются контейнеры `ndtp-emu`, `db`, `backend`, `ml-model`;
 2. backend сам отправляет конфиг эмулятору — поток телеметрии стартует;
-3. `ml-model` заливает расписание/точки (если пусто), затем каждые 20 с считает
+3. `ml-model` заливает расписание/точки (если таблицы пусты), затем каждые ~20 с считает
    офлайн-прогнозы и live-алерты и пишет в `predictions`.
+
+> ⏱️ **Первый прогноз появляется через ~20–60 секунд** после `make up`: воркеру нужно
+> время на подключение к БД и первичную заливку расписания/телеметрии из CSV.
+
+### Шаг 4. Проверить
+
+```bash
+make health                              # → {"status":"ok"}
+make ps                                  # все 4 контейнера в статусе Up
+```
+
+Если `make health` вернул ошибку сразу после `make up` — подождите 10–20 секунд
+(backend стартует с ожиданием БД) и повторите.
+
+### Если телеметрия идёт, а прогнозов нет
+
+Симптом: `count(*) FROM ndtp_telemetry` растёт, а `SELECT count(*) FROM predictions` = 0,
+у воркера в логах ошибка `IsADirectoryError`.
+
+Причина — известный баг **Docker Desktop на Windows/WSL**: при bind-mount крупных файлов
+(`validate/traffic.csv` ~17 МБ, `schedule_plan.csv`) они могли смонтироваться **как каталоги**,
+и воркер не может их прочитать. `up`/`down`/`restart` это часто не лечит.
+
+Решение — **полный рестарт Docker Desktop** (иконка в трее → Restart / Quit→запустить
+заново), затем ещё раз:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+Альтернатива — скопировать сами файлы внутрь контейнера (не через bind-mount), изменив
+`ml-model/Dockerfile` на `COPY` данных в образ.
 
 ### Проверка, что всё работает
 
