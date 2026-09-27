@@ -51,7 +51,6 @@ mlruns/
 .ipynb_checkpoints/
 
 # --- Docker / сборка ---
-*.tar
 *.tar.gz
 
 # --- IDE / OS ---
@@ -61,11 +60,8 @@ mlruns/
 .DS_Store
 Thumbs.db
 
-# --- Данные датасета ---
-# Файлы уже закоммичены в git (архив эмулятора + CSV). Игнорируем их
-# изменения, чтобы не засорять репозиторий новыми версиями тяжёлых данных.
-dataset/
 
 # --- Данные приложения ---
 pgdata/
 data/
+dataset/ndtp-telemetry-emulator.tar
