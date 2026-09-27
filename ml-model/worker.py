@@ -26,6 +26,7 @@ DB_DSN = os.getenv(
     "postgresql://mthack:mthack@db:5432/mthack",
 )
 SCHEDULE_CSV = os.getenv("SCHEDULE_CSV", "/app/data/schedule_plan.csv")
+TRAFFIC_CSV = os.getenv("TRAFFIC_CSV", "/app/data/traffic.csv")  # только для маппинга unit_id->tr_id
 
 INTERVAL = int(os.getenv("INTERVAL", "20"))
 TELEMETRY_LIMIT = int(os.getenv("TELEMETRY_LIMIT", "200000"))
@@ -92,6 +93,10 @@ CREATE TABLE IF NOT EXISTS stream_shift (
     id INTEGER PRIMARY KEY,
     offset_s DOUBLE PRECISION
 );
+CREATE TABLE IF NOT EXISTS unit_map (
+    unit_id TEXT PRIMARY KEY,
+    tr_id TEXT
+);
 """
 
 
@@ -113,7 +118,12 @@ async def init_db(conn):
 
 
 async def seed_static(conn):
-    """Заполняет schedule_stops из CSV, если пуста (нужна live-циклу)."""
+    """Заполняет справочники из CSV, если пусты.
+
+    schedule_stops — плановое расписание; unit_map — соответствие
+    unit_id (устройство, его шлёт эмулятор) -> tr_id (ТС из расписания),
+    источник маппинга — traffic.csv.
+    """
     n_sched = await conn.fetchval("SELECT count(*) FROM schedule_stops")
     if n_sched == 0 and os.path.exists(SCHEDULE_CSV):
         df = pd.read_csv(SCHEDULE_CSV)
@@ -124,6 +134,18 @@ async def seed_static(conn):
                 str(r["tt_action_item_id"]), r["time_begin"], str(r["tr_id"]), r["geom"],
             )
         print(f"[worker] залито расписание: {len(df)} строк", flush=True)
+
+    n_map = await conn.fetchval("SELECT count(*) FROM unit_map")
+    if n_map == 0 and os.path.exists(TRAFFIC_CSV):
+        df = pd.read_csv(TRAFFIC_CSV, dtype=str)
+        pairs = df[["unit_id", "tr_id"]].dropna().drop_duplicates("unit_id")
+        for _, r in pairs.iterrows():
+            await conn.execute(
+                "INSERT INTO unit_map (unit_id, tr_id) VALUES ($1, $2) "
+                "ON CONFLICT (unit_id) DO NOTHING",
+                r["unit_id"], r["tr_id"],
+            )
+        print(f"[worker] залит маппинг unit_id->tr_id: {len(pairs)} пар", flush=True)
 
 
 async def fetchtab(conn, sql, *args) -> list:
@@ -145,11 +167,19 @@ async def map_match_telemetry(conn):
 
     recent = await fetchtab(
         conn,
-        "SELECT tr_id, event_time, lat, lon, speed, heading "
-        "FROM ndtp_telemetry WHERE location_valid AND tr_id = ANY($1) "
+        "SELECT unit_id, event_time, lat, lon, speed, heading "
+        "FROM ndtp_telemetry WHERE location_valid "
         "ORDER BY id DESC LIMIT 1500",
-        has_route,
     )
+    if not recent:
+        return
+
+    # в потоке unit_id устройства — переводим в tr_id расписания
+    map_rows = await fetchtab(conn, "SELECT unit_id, tr_id FROM unit_map")
+    unit2tr = {r["unit_id"]: r["tr_id"] for r in map_rows}
+    for p in recent:
+        p["tr_id"] = unit2tr.get(str(p["unit_id"]))
+    recent = [p for p in recent if p["tr_id"] in order]
     if not recent:
         return
 
@@ -161,8 +191,9 @@ async def map_match_telemetry(conn):
                 continue
             try:
                 res = mm.match(p["lat"], p["lon"], heading=p["heading"], speed=p["speed"])
-                # ON CONFLICT: не плодим дубли при повторных циклах
-                await conn.execute(
+                # ON CONFLICT: не плодим дубли при повторных циклах;
+                # считаем только реально вставленные строки (status = "INSERT 0 1")
+                status = await conn.execute(
                     """
                     INSERT INTO route_features
                         (tr_id,event_time,lat,lon,speed,heading,
@@ -176,7 +207,8 @@ async def map_match_telemetry(conn):
                     res["route_progress_m"], res["route_progress_frac"],
                     res["dist_to_route_m"], res["seg_index"],
                 )
-                written += 1
+                if status.endswith("1"):
+                    written += 1
             except Exception:
                 continue
         if written:
@@ -280,17 +312,28 @@ async def live_early_warning(conn):
     if offset_s:
         sched["time_begin"] += pd.to_timedelta(offset_s, unit="s")
 
+    # --- активные ТС: в потоке лежит unit_id устройства, переводим в tr_id ---
     active = await fetchtab(
-        conn, "SELECT DISTINCT tr_id FROM ndtp_telemetry WHERE location_valid")
+        conn, "SELECT DISTINCT unit_id FROM ndtp_telemetry WHERE location_valid")
     if not active:
         print("[live] нет валидной телеметрии", flush=True)
         return
-    active_ids = {str(r["tr_id"]) for r in active}
+    unit_ids = [str(r["unit_id"]) for r in active]
+    map_rows = await fetchtab(
+        conn, "SELECT unit_id, tr_id FROM unit_map WHERE unit_id = ANY($1)", unit_ids)
+    unit2tr = {r["unit_id"]: r["tr_id"] for r in map_rows}
+    tr2unit = {v: k for k, v in unit2tr.items()}
+    if not unit2tr:
+        print(f"[live] ни один unit_id потока не найден в unit_map "
+              f"(active={len(unit_ids)})", flush=True)
+        return
+    active_ids = set(unit2tr.values())
     sched = sched[sched["tr_id"].isin(active_ids)]
     if sched.empty:
         print(
             f"[live] расписание не пересекается с активными ТС "
-            f"(active={len(active_ids)}): проверьте маппинг tr_id",
+            f"(active={len(active_ids)} из {len(unit_ids)} юнитов): "
+            f"эмулятор гоняет ТС не из расписания",
             flush=True,
         )
         return
@@ -315,9 +358,9 @@ async def live_early_warning(conn):
         tele_tr = await fetchtab(
             conn,
             "SELECT event_time, location_valid, lon, lat, speed, heading "
-            "FROM ndtp_telemetry WHERE tr_id = $1 AND location_valid "
+            "FROM ndtp_telemetry WHERE unit_id = $1 AND location_valid "
             "ORDER BY id DESC LIMIT 1",
-            tr,
+            tr2unit.get(tr, tr),
         )
         if not tele_tr:
             continue
@@ -339,10 +382,14 @@ async def live_early_warning(conn):
     points = pd.DataFrame(rows)
     tele = pd.DataFrame(await fetchtab(
         conn,
-        "SELECT event_time, tr_id, location_valid, lon, lat, speed "
+        "SELECT event_time, unit_id, location_valid, lon, lat, speed "
         "FROM ndtp_telemetry ORDER BY id DESC LIMIT $1",
         TELEMETRY_LIMIT,
     ))
+    if not tele.empty:
+        # переводим unit_id потока в tr_id расписания — build_features группирует по tr_id
+        tele["tr_id"] = tele["unit_id"].astype(str).map(unit2tr)
+        tele = tele.dropna(subset=["tr_id"])
 
     _t0 = time.perf_counter()                       # метрика latency (критерий 5)
     feats = build_features(points, tele, sched)

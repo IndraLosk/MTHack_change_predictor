@@ -44,7 +44,7 @@ def build_features(points, traffic, schedule):
     schedule = schedule.copy()
     points['T'] = pd.to_datetime(points['T'])
     points['target_time_begin'] = pd.to_datetime(points['target_time_begin'])
-    traffic['event_time'] = pd.to_datetime(traffic['event_time'])
+    traffic['event_time'] = pd.to_datetime(traffic['event_time'], format='mixed')
     schedule['time_begin'] = pd.to_datetime(schedule['time_begin'])
 
     schedule[['stop_lon', 'stop_lat']] = pd.DataFrame(
@@ -125,13 +125,16 @@ def build_features(points, traffic, schedule):
 
 
 if __name__ == '__main__':
+    # Оффлайн-сабмит по валидационной выборке (единственная задача оффлайна).
+    # Запуск из папки ml-model:  DATA_DIR=../data python3 features.py
+    import os
     import lightgbm as lgb
-    # пример инференса на validate
-    points = pd.read_csv('../dataset/validate/points.csv')
-    traffic = pd.read_csv('../dataset/validate/traffic.csv')
-    schedule = pd.read_csv('../dataset/validate/schedule_plan.csv')
+    DATA = os.getenv('DATA_DIR', '../data')
+    points = pd.read_csv(f'{DATA}/points.csv')
+    traffic = pd.read_csv(f'{DATA}/traffic.csv')
+    schedule = pd.read_csv(f'{DATA}/schedule_plan.csv')
     feats = build_features(points, traffic, schedule)
-    model = lgb.Booster(model_file='model.txt')
+    model = lgb.Booster(model_file=os.getenv('MODEL_PATH', 'model.txt'))
     preds = model.predict(feats[FEATURES])
     sub = pd.DataFrame({'sample_id': feats.index, 'prediction': preds.round(1)})
     sub.to_csv('submission.csv', sep=';', index=False)
