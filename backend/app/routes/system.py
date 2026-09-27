@@ -1,24 +1,38 @@
-"""Системные ручки: визитка и статус сервиса."""
+"""Системные эндпоинты: визитка сервиса и проверка готовности."""
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from .. import settings
 
 router = APIRouter(tags=["system"])
 
 
-@router.get("/")
-async def root():
-    """Визитка сервиса: имя, docs, адрес эмулятора, порт приёма."""
-    return {
-        "service": "MTHack backend",
-        "docs": "/docs",
-        "emulator": settings.NDTP_EMULATOR_URL,
-        "ndtp_receive_port": settings.NDTP_RECEIVE_PORT,
-    }
+class RootResponse(BaseModel):
+    """Схема ответа визитки сервиса."""
+    service: str
+    docs: str
+    emulator: str
+    ndtp_receive_port: int
 
 
-@router.get("/health")
-async def health():
-    """Проверка, что сервис жив."""
-    return {"status": "ok"}
+class HealthResponse(BaseModel):
+    """Схема ответа проверки живости."""
+    status: str
+
+
+@router.get("/", response_model=RootResponse)
+async def root() -> RootResponse:
+    """Возвращает визитку сервиса и его актуальную конфигурацию."""
+    return RootResponse(
+        service="MTHack backend",
+        docs="/docs",
+        emulator=settings.NDTP_EMULATOR_URL,
+        ndtp_receive_port=settings.NDTP_RECEIVE_PORT,
+    )
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    """Возвращает статус живости сервиса для healthcheck."""
+    return HealthResponse(status="ok")

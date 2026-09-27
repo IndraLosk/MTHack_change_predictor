@@ -1,8 +1,4 @@
-"""FastAPI-приложение: оркестрация приёма NDTP и запись в CSV/PostgreSQL.
-
-При старте подключает базу, запускает TCP-приёмник телеметрии, автоконфигурирует
-эмулятор; при остановке корректно сбрасывает остатки и закрывает ресурсы.
-"""
+"""Точка входа: создание приложения, регистрация роутеров и жизненный цикл."""
 
 import asyncio
 import json
@@ -15,12 +11,12 @@ from fastapi import FastAPI
 
 from . import settings
 from .ndtp import receiver
-from .routes import emulator, predictions, system, telemetry
+from .routes import emulator, fleet, predictions, system, telemetry
 from .services.db import Database
 
 
 async def _auto_configure_emulator():
-    """Автоматически отправляет конфиг эмулятору при старте (с ретраями)."""
+    """Отправляет конфиг эмулятору при старте"""
     path = settings.NDTP_AUTO_CONFIG
     if not os.path.exists(path):
         print(f"[auto] конфиг эмулятора не найден: {path}", flush=True)
@@ -49,7 +45,7 @@ async def _auto_configure_emulator():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Управляет жизненным циклом: подключает БД, запускает приём, гасит ресурсы."""
+    """Управляет жизненным циклом: инициализирует и гасит ресурсы приложения."""
     db = Database()
     await db.connect()
     app.state.db = db
@@ -88,3 +84,4 @@ app.include_router(system.router)
 app.include_router(emulator.router)
 app.include_router(telemetry.router)
 app.include_router(predictions.router)
+app.include_router(fleet.router)

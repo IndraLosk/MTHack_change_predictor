@@ -1,4 +1,4 @@
-"""Работа с PostgreSQL: подключение, схема, чтение/запись данных."""
+"""Слой доступа к PostgreSQL: пул соединений и операции чтения/записи."""
 
 import asyncio
 from datetime import datetime
@@ -9,7 +9,7 @@ from .. import settings
 
 
 def _to_dt(value):
-    """Преобразует строку времени в datetime (или None)."""
+    """Приводит строку времени к datetime для колонок TIMESTAMPTZ."""
     if not value:
         return None
     try:
@@ -19,21 +19,21 @@ def _to_dt(value):
 
 
 class Database:
-    """Обёртка над пулом соединений asyncpg."""
+    """Пул соединений asyncpg и операции над данными приложения."""
 
     def __init__(self):
         self.pool = None
 
     @property
     def dsn(self) -> str:
-        """Строка подключения к PostgreSQL."""
+        """Строка подключения к PostgreSQL из настроек окружения."""
         return (
             f"postgresql://{settings.DB_USER}:{settings.DB_PASSWORD}"
             f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
         )
 
     async def connect(self):
-        """Создаёт пул соединений и гарантирует наличие таблиц."""
+        """Создаёт пул соединений и гарантирует наличие схемы (с ретраями)."""
         for attempt in range(30):
             try:
                 self.pool = await asyncpg.create_pool(self.dsn)
@@ -46,7 +46,7 @@ class Database:
         raise RuntimeError("не удалось подключиться к PostgreSQL")
 
     async def ensure_tables(self):
-        """Создаёт таблицы ndtp_telemetry и predictions, если их нет."""
+        """Создаёт таблицы ndtp_telemetry, predictions и schedule_stops, если их нет."""
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS ndtp_telemetry (
@@ -70,10 +70,16 @@ class Database:
                     sample_id TEXT PRIMARY KEY,
                     prediction DOUBLE PRECISION
                 );
+                CREATE TABLE IF NOT EXISTS schedule_stops (
+                    tt_action_item_id TEXT PRIMARY KEY,
+                    time_begin TEXT,
+                    tr_id TEXT,
+                    geom TEXT
+                );
             """)
 
     async def insert_ndtp(self, rows: list[dict]):
-        """Вставляет пачку телеметрии в таблицу ndtp_telemetry."""
+        """Пакетно вставляет телеметрию в ndtp_telemetry (формат traffic.csv)."""
         if not rows:
             return
         tuples = []
@@ -115,20 +121,31 @@ class Database:
             )
 
     async def get_predictions(self) -> list:
-        """Возвращает все предсказания из БД."""
+        """Возвращает все предсказания, отсортированные по sample_id."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT sample_id, prediction FROM predictions ORDER BY sample_id")
         return [{"sample_id": r["sample_id"], "prediction": r["prediction"]} for r in rows]
 
-    async def get_ndtp(self, limit: int = 100) -> list:
-        """Возвращает последние строки телеметрии из БД."""
+    async def fetch_schedule_stops(self) -> list:
+        """Возвращает остановки маршрутов из schedule_stops (стопы + план времени)."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM ndtp_telemetry ORDER BY id DESC LIMIT $1", limit
+                "SELECT tr_id, geom, time_begin FROM schedule_stops WHERE geom IS NOT NULL"
             )
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            parts = str(r["geom"]).replace("POINT", "").replace("(", "").replace(")", "").split()
+            if len(parts) != 2:
+                continue
+            result.append({
+                "tr_id": str(r["tr_id"]),
+                "stop_lon": float(parts[0]),
+                "stop_lat": float(parts[1]),
+                "time_begin": str(r["time_begin"]) if r["time_begin"] is not None else None,
+            })
+        return result
 
     async def close(self):
-        """Закрывает пул соединений."""
+        """Закрывает пул соединений (при остановке приложения)."""
         if self.pool:
             await self.pool.close()
