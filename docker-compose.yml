@@ -17,6 +17,20 @@ services:
     volumes:
       - "./pgdata:/var/lib/postgresql/data"
 
+  ml-model:
+    build: ./ml-model
+    container_name: mthack-ml
+    environment:
+      DB_DSN: postgresql://mthack:mthack@db:5432/mthack
+      MODEL_PATH: /app/model.txt
+      POINTS_CSV: /app/data/points.csv
+      SCHEDULE_CSV: /app/data/schedule_plan.csv
+      INTERVAL: 20
+    volumes:
+      - "./dataset/validate/points.csv:/app/data/points.csv:ro"
+      - "./dataset/validate/schedule_plan.csv:/app/data/schedule_plan.csv:ro"
+      - "./dataset/validate/traffic.csv:/app/data/traffic.csv:ro"
+
   backend:
     build: ./backend
     container_name: mthack-backend
@@ -35,3 +49,4 @@ services:
     depends_on:
       - ndtp-emu
       - db
+      - ml-model

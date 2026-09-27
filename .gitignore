@@ -63,14 +63,7 @@ Thumbs.db
 
 # --- Данные датасета ---
 # Большие файлы телеметрии и расписаний не коммитим в git.
-dataset/train/traffic.csv
-dataset/train/schedule.csv
-dataset/test/traffic.csv
-dataset/test/schedule.csv
-dataset/validate/traffic.csv
-dataset/validate/schedule_plan.csv
-dataset/ndtp-telemetry-emulator.tar
-# Маленькие файлы (labels, points, описание, submission-шаблон) остаются в репо.
+dataset/
 
 # --- Данные приложения ---
 pgdata/

@@ -89,6 +89,11 @@ def recent(limit: int) -> list:
     return list(RECEIVED)[-limit:]
 
 
+def total() -> int:
+    """Возвращает число строк в буфере истории."""
+    return len(RECEIVED)
+
+
 def latest(limit: int = 500) -> list:
     """Возвращает последнее состояние по каждому ТС (одна строка на ТС)."""
     return list(LATEST.values())[-limit:]

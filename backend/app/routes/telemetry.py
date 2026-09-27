@@ -12,7 +12,7 @@ async def ndtp_decoded(limit: int = 50):
     """Последние раскодированные строки телеметрии (формат traffic.csv)."""
     rows = receiver.recent(limit)
     return {
-        "total": len(receiver.RECEIVED),
+        "total": receiver.total(),
         "limit": limit,
         "rows": rows,
     }
