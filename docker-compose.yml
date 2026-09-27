@@ -50,3 +50,25 @@ services:
       - ndtp-emu
       - db
       - ml-model
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: mthack-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_VIEWER_CAN_EDIT: "true"
+      GF_PANELS_DISABLE_SANITIZE_HTML: "true"
+    volumes:
+      - "./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro"
+      - "./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro"
+      - "./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting:ro"
+      - "./grafana/dashboards:/var/lib/grafana/dashboards:ro"
+      - "grafana-data:/var/lib/grafana"
+    depends_on:
+      - db
+
+volumes:
+  grafana-data:

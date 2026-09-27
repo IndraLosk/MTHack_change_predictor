@@ -1,0 +1,234 @@
+{
+  "uid": "mthack-transport-dashboard",
+  "title": "Диспетчерская 2 + 1 = 21",
+  "tags": ["mthack", "transport"],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": { "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "ML-прогноз: Топ критических задержек",
+      "datasource": { "type": "postgres", "uid": "mthackpg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  sample_id AS \"ID Маршрута/Остановки\",\n  prediction::numeric AS \"Прогноз задержки (сек)\"\nFROM predictions\nORDER BY prediction::numeric DESC\nLIMIT 10;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "s",
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "footer": { "reducers": [] }, "inspect": false },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [{ "desc": true, "displayName": "Прогноз задержки (сек)" }]
+      }
+    },
+    {
+      "id": 5,
+      "type": "gauge",
+      "title": "Активные ТС на маршрутах",
+      "datasource": { "type": "postgres", "uid": "mthackpg" },
+      "gridPos": { "h": 8, "w": 4, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT unit_id) AS \"Активные ТС на линии\"\nFROM ndtp_telemetry\nWHERE event_time::timestamp >= now() - interval '1 hour';"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 11 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sparkline": false,
+        "shape": "gauge"
+      }
+    },
+    {
+      "id": 4,
+      "type": "alertlist",
+      "title": "Журнал инцидентов",
+      "datasource": null,
+      "gridPos": { "h": 13, "w": 6, "x": 16, "y": 0 },
+      "options": {
+        "showOptions": "current",
+        "maxItems": 20,
+        "sortOrder": 1
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "geomap",
+      "title": "Live-мониторинг подвижного состава",
+      "datasource": { "type": "postgres", "uid": "mthackpg" },
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT DISTINCT ON (unit_id)\n  unit_id AS \"metric\",\n  lat::numeric AS \"latitude\",\n  lon::numeric AS \"longitude\",\n  speed::numeric AS speed\nFROM ndtp_telemetry\nORDER BY unit_id, id DESC"
+        },
+        {
+          "refId": "B",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  unit_id AS \"metric\",\n  json_build_object(\n    'type', 'LineString',\n    'coordinates', json_agg(json_build_array(lon::numeric, lat::numeric) ORDER BY event_time::timestamp ASC)\n  )::text AS geometry\nFROM ndtp_telemetry\nWHERE event_time::timestamp >= now() - interval '30 minutes'\nGROUP BY unit_id"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-red", "value": null },
+              { "color": "#EAB839", "value": 15 },
+              { "color": "green", "value": 40 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "view": { "id": "coordinate", "lat": 55.7558, "lon": 37.6173, "zoom": 12 },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showZoom": true,
+          "showAttribution": true,
+          "showScale": false,
+          "showMeasure": false
+        },
+        "tooltip": { "mode": "details", "showSecondaryFields": false },
+        "basemap": {
+          "type": "xyz",
+          "config": {
+            "url": "https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU&key=2e57d794-b539-4648-aca9-6935d17cafd4",
+            "attribution": "© Яндекс Карты",
+            "maxZoom": 18,
+            "subdomains": []
+          }
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Автобусы (скорость)",
+            "query": "A",
+            "config": {
+              "showLegend": true,
+              "style": {
+                "colorMode": "thresholds",
+                "colorField": "speed",
+                "size": 12,
+                "sizeMode": "fixed",
+                "opacity": 1,
+                "showLabel": "never",
+                "shapes": ["circle"]
+              },
+              "location": { "mode": "coords", "latitude": "latitude", "longitude": "longitude" }
+            },
+            "tooltip": true
+          },
+          {
+            "type": "route",
+            "name": "Треки (30 мин)",
+            "query": "B",
+            "config": {
+              "style": {
+                "colorMode": "fixed",
+                "color": "dark-green",
+                "opacity": 0.5,
+                "lineWidth": 2
+              },
+              "location": { "mode": "auto" }
+            },
+            "tooltip": false
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Среднее отклонение от расписания (сек)",
+      "datasource": { "type": "postgres", "uid": "mthackpg" },
+      "gridPos": { "h": 4, "w": 6, "x": 16, "y": 13 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT avg(prediction::numeric)::int AS \"Средняя задержка (сек)\" FROM predictions;"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 180 },
+              { "color": "red", "value": 300 }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    }
+  ]
+}
