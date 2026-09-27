@@ -59,6 +59,7 @@ def build_features(points, traffic, schedule):
     tele_grp = dict(tuple(tele.groupby('tr_id')))
 
     rows = []
+    n_missing_stop = 0
     for _, r in points.iterrows():
         tr, T = r['tr_id'], r['T']
         f = {'sample_id': r['sample_id'], 'cur_dev_s': r['cur_dev_s'],
@@ -84,29 +85,51 @@ def build_features(points, traffic, schedule):
                 f['dist_10m_m'] = float(hav(h10['lat'].values[:-1], h10['lon'].values[:-1],
                                             h10['lat'].values[1:], h10['lon'].values[1:]).sum()) if len(h10) > 1 else 0.0
 
-        s = sched_by_stop.loc[r['target_stop_id']]
-        f['plan_seg_s'] = s['plan_seg_s']
-        if 'last_lon' in f and not pd.isna(f.get('last_lon')):
-            f['dist_to_target_m'] = float(hav(f['last_lat'], f['last_lon'], s['stop_lat'], s['stop_lon']))
-            time_left_s = max((r['target_time_begin'] - T).total_seconds(), 1)
-            f['req_speed_kmh'] = f['dist_to_target_m'] / time_left_s * 3.6
-            for w in (5, 10):
-                m = f.get(f'speed_mean_{w}m')
-                f[f'eta_delay_{w}m'] = (f['dist_to_target_m'] / (m / 3.6) - time_left_s) if m and m > 0.5 else np.nan
+        # целевая остановка может отсутствовать в расписании — не роняем пачку
+        try:
+            s = sched_by_stop.loc[r['target_stop_id']]
+            if isinstance(s, pd.DataFrame):   # дубликаты id в расписании
+                s = s.iloc[0]
+        except KeyError:
+            s = None
+            n_missing_stop += 1
+
+        if s is not None:
+            f['plan_seg_s'] = s['plan_seg_s']
+            if 'last_lon' in f and not pd.isna(f.get('last_lon')):
+                f['dist_to_target_m'] = float(hav(f['last_lat'], f['last_lon'], s['stop_lat'], s['stop_lon']))
+                time_left_s = max((r['target_time_begin'] - T).total_seconds(), 1)
+                f['req_speed_kmh'] = f['dist_to_target_m'] / time_left_s * 3.6
+                for w in (5, 10):
+                    m = f.get(f'speed_mean_{w}m')
+                    f[f'eta_delay_{w}m'] = (f['dist_to_target_m'] / (m / 3.6) - time_left_s) if m and m > 0.5 else np.nan
         sch_tr = sched_sorted[sched_sorted['tr_id'] == tr]
         f['n_stops_between'] = int(((sch_tr['time_begin'] > T) &
                                     (sch_tr['time_begin'] < r['target_time_begin'])).sum())
         rows.append(f)
 
-    return pd.DataFrame(rows).set_index('sample_id')
+    if n_missing_stop:
+        print(f'[features] точек без остановки в расписании: {n_missing_stop} '
+              f'(пропущены плановые признаки)', flush=True)
+
+    if not rows:
+        return pd.DataFrame(columns=FEATURES, index=pd.Index([], name='sample_id'))
+
+    out = pd.DataFrame(rows).set_index('sample_id')
+    # гарантия схемы: колонки, которые не набрались ни у одной точки
+    # (например, пустые окна 5/10 мин на всей пачке), добиваем NaN
+    for col in FEATURES:
+        if col not in out.columns:
+            out[col] = np.nan
+    return out
 
 
 if __name__ == '__main__':
     import lightgbm as lgb
     # пример инференса на validate
-    points = pd.read_csv('../validate/points.csv')
-    traffic = pd.read_csv('../validate/traffic.csv')
-    schedule = pd.read_csv('../validate/schedule_plan.csv')
+    points = pd.read_csv('../dataset/validate/points.csv')
+    traffic = pd.read_csv('../dataset/validate/traffic.csv')
+    schedule = pd.read_csv('../dataset/validate/schedule_plan.csv')
     feats = build_features(points, traffic, schedule)
     model = lgb.Booster(model_file='model.txt')
     preds = model.predict(feats[FEATURES])

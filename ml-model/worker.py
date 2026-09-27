@@ -1,4 +1,8 @@
-"""ML-воркер: инференс через общую БД"""
+"""ML-воркер: инференс через общую БД.
+
+Окно live-прогноза считается от ЧАСОВ ПОТОКА (max event_time в БД),
+а не от настенных — так воркеру безразлично, сдвигает ли эмулятор время.
+"""
 
 import asyncio
 import os
@@ -79,6 +83,8 @@ CREATE TABLE IF NOT EXISTS route_features (
     dist_to_route_m DOUBLE PRECISION,
     seg_index INTEGER
 );
+CREATE UNIQUE INDEX IF NOT EXISTS route_features_tr_event_uidx
+    ON route_features (tr_id, event_time);
 """
 
 
@@ -152,7 +158,7 @@ async def seed_static(conn):
                     bool(r.get("is_hist_data", False)),
                 )
                 inserted += 1
-            except Exception as exc:
+            except Exception:
                 continue
         print(f"[worker] залито телеметрии: {inserted} строк", flush=True)
 
@@ -192,6 +198,7 @@ async def map_match_telemetry(conn):
                 continue
             try:
                 res = mm.match(p["lat"], p["lon"], heading=p["heading"], speed=p["speed"])
+                # ON CONFLICT: не плодим дубли при повторных циклах
                 await conn.execute(
                     """
                     INSERT INTO route_features
@@ -199,6 +206,7 @@ async def map_match_telemetry(conn):
                          matched_lat,matched_lon,route_progress_m,route_progress_frac,
                          dist_to_route_m,seg_index)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    ON CONFLICT (tr_id, event_time) DO NOTHING
                     """,
                     tr, p["event_time"], p["lat"], p["lon"], p.get("speed"),
                     p.get("heading"), res["matched_lat"], res["matched_lon"],
@@ -214,7 +222,10 @@ async def map_match_telemetry(conn):
 
 
 def _current_dev_s(grp_sched, last, now_naive):
-    """Оценка текущего отклонения ТС: задержка на последней уже пройденной остановке."""
+    """Оценка текущего отклонения ТС: задержка на последней уже пройденной остановке.
+
+    now_naive — ВРЕМЯ ПОТОКА (max event_time), а не настенные часы.
+    """
     pts = [decode_geom(g) for g in grp_sched["geom"]]
     if len(pts) < 2:
         return np.nan
@@ -237,25 +248,33 @@ def _current_dev_s(grp_sched, last, now_naive):
 async def live_early_warning(conn):
     """Живое раннее оповещение на потоке.
 
-    Для каждого активного ТС ищет ближайшую плановую остановку из schedule_stops,
-    чьё плановое прибытие попадает в окно T+10..15 мин (горизонт из ТЗ), собирает
-    те же 24 признака (features.build_features, только данные на момент T) и сразу
-    пишет прогноз задержки в predictions. Прогноз подписан: '+' => опоздание,
-    '-' => опережение.
+    «Сейчас» (T) — время последней телеметрии, реально поступившей в БД
+    (max event_time), а не настенные часы сервера. Для каждого активного ТС
+    ищется ближайшая плановая остановка с прибытием в окне T+10..15 мин,
+    собираются те же 24 признака (только данные на момент T, анти-утечка),
+    прогноз пишется в predictions с sample_id = live_<tr_id>.
+    Прогноз подписан: '+' => опоздание, '-' => опережение.
     """
     if not model.ready:
         print(f"[live] модель не загружена: {model.error}", flush=True)
         return
 
-    now_utc = datetime.now(timezone.utc)
-    now_naive = now_utc.replace(tzinfo=None)
-    T_dt = pd.Timestamp(now_naive)
+    # --- часы потока: max event_time из поступившей телеметрии ---
+    max_et = await conn.fetchval(
+        "SELECT MAX(event_time) FROM ndtp_telemetry WHERE location_valid"
+    )
+    if not max_et:
+        print("[live] телеметрии в БД нет — жду поток", flush=True)
+        return
+    T_dt = pd.Timestamp(str(max_et))
+    now_naive = T_dt.to_pydatetime()
     lo = T_dt + pd.Timedelta(minutes=LIVE_WINDOW_MIN)
     hi = T_dt + pd.Timedelta(minutes=LIVE_WINDOW_MAX)
 
     sched = pd.DataFrame(await fetchtab(
         conn, "SELECT tt_action_item_id, time_begin, tr_id, geom FROM schedule_stops"))
     if sched.empty:
+        print("[live] schedule_stops пустая — расписание не загружено", flush=True)
         return
     sched["time_begin"] = pd.to_datetime(sched["time_begin"])
     sched["tr_id"] = sched["tr_id"].astype(str)
@@ -263,13 +282,27 @@ async def live_early_warning(conn):
     active = await fetchtab(
         conn, "SELECT DISTINCT tr_id FROM ndtp_telemetry WHERE location_valid")
     if not active:
+        print("[live] нет валидной телеметрии", flush=True)
         return
     active_ids = {str(r["tr_id"]) for r in active}
     sched = sched[sched["tr_id"].isin(active_ids)]
     if sched.empty:
+        print(
+            f"[live] расписание не пересекается с активными ТС "
+            f"(active={len(active_ids)}): проверьте маппинг tr_id",
+            flush=True,
+        )
         return
 
     nxt = sched[(sched["time_begin"] > lo) & (sched["time_begin"] <= hi)]
+    if nxt.empty:
+        print(
+            f"[live] T={T_dt} — в окне +{LIVE_WINDOW_MIN}..{LIVE_WINDOW_MAX} мин "
+            f"нет плановых остановок (расписание: "
+            f"{sched['time_begin'].min()} .. {sched['time_begin'].max()})",
+            flush=True,
+        )
+        return
 
     rows = []
     for tr, grp in nxt.groupby("tr_id"):
@@ -299,6 +332,7 @@ async def live_early_warning(conn):
         })
 
     if not rows:
+        print("[live] нет активных ТС с телеметрией для точек в окне", flush=True)
         return
 
     points = pd.DataFrame(rows)
@@ -314,6 +348,7 @@ async def live_early_warning(conn):
     preds = model.booster.predict(feats[FEATURES])
     infer_ms = (time.perf_counter() - _t0) * 1000.0
 
+    # stale — по настенным часам записи бэкендом (это корректно, не путать с T)
     now = datetime.now(timezone.utc)
     last_received = await conn.fetchval("SELECT MAX(receive_time) FROM ndtp_telemetry")
     stale = False
@@ -336,9 +371,9 @@ async def live_early_warning(conn):
             str(sid), pred, stale,
         )
     print(
-        f"[live] алертов={len(preds)} опозданий={n_late} ранних={len(preds) - n_late} "
-        f"stale={stale} latency={infer_ms:.1f}ms "
-        f"({infer_ms / len(preds):.1f}ms/алерт если>0)",
+        f"[live] T={T_dt} алертов={len(preds)} опозданий={n_late} "
+        f"ранних/вовремя={len(preds) - n_late} stale={stale} "
+        f"latency={infer_ms:.1f}ms ({infer_ms / len(preds):.1f}ms/алерт)",
         flush=True,
     )
 
@@ -350,6 +385,7 @@ async def infer(conn):
 
     points = pd.DataFrame(await fetchtab(conn, "SELECT * FROM forecast_points"))
     if points.empty:
+        print("[worker] forecast_points пустая — points.csv не загружен, офлайн-прогноз пропущен", flush=True)
         return
     points.rename(columns={"t": "T"}, inplace=True)
 
