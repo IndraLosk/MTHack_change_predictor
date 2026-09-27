@@ -1,0 +1,52 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: "Транспорт"
+    folder: "Транспорт"
+    interval: 1m
+    rules:
+      - uid: mthack-live-risk
+        title: "Пиковая прогнозируемая задержка ТС > 2 мин"
+        condition: "C"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: mthackpg
+            model:
+              refId: A
+              datasource:
+                type: postgres
+                uid: mthackpg
+              format: table
+              rawQuery: true
+              rawSql: "SELECT COALESCE(MAX(prediction),0) AS \"value\" FROM predictions"
+          - refId: B
+            datasourceUid: __expr__
+            type: reduce
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            type: threshold
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [120]
+              refId: C
+        noDataState: NoData
+        execErrState: Error
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Пиковая прогнозируемая задержка в парке превысила 2 минуты (signed: + = опоздание)"
+          dashboardUid: mthack-transport-dashboard
