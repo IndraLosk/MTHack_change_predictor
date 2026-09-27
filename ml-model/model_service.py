@@ -21,7 +21,8 @@ import os
 
 import pandas as pd
 
-from features import build_features, FEATURES
+from features_base import build_features, FEATURES
+#from features_gav import build_features, FEATURES
 
 MODEL_PATH = os.getenv(
     'MODEL_PATH',
