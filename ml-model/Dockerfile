@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY features.py model_service.py model.txt worker.py ./
+COPY features.py model_service.py model.txt map_matching.py worker.py ./
 
 ENV MODEL_PATH=/app/model.txt
 

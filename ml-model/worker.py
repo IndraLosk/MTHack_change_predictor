@@ -1,22 +1,16 @@
-"""ML-воркер: инференс через общую БД (без HTTP).
-
-Связующим «мостом» между backend и моделью выступает PostgreSQL:
-- backend пишет телеметрию в ndtp_telemetry;
-- воркер читает из БД прогнозные точки, расписание и телеметрию,
-  строит признаки и пишет предсказания обратно в predictions.
-
-Статические справочные данные (точки прогноза и расписание) воркер
-один раз переносит в БД из смонтированных CSV, если таблицы пусты.
-"""
+"""ML-воркер: инференс через общую БД"""
 
 import asyncio
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 
 from features import FEATURES, build_features  # пайплайн признаков
 from model_service import model  # singleton: грузится один раз
+from map_matching import MapMatcher, decode_geom  # Map Matching (доп. фича ТЗ)
 
 DB_DSN = os.getenv(
     "DB_DSN",
@@ -28,6 +22,11 @@ TRAFFIC_CSV = os.getenv("TRAFFIC_CSV", "/app/data/traffic.csv")
 
 INTERVAL = int(os.getenv("INTERVAL", "20"))
 TELEMETRY_LIMIT = int(os.getenv("TELEMETRY_LIMIT", "200000"))
+STALE_AFTER_SECONDS = int(os.getenv("STALE_AFTER_SECONDS", "45"))
+
+LIVE_WINDOW_MIN = int(os.getenv("LIVE_WINDOW_MIN", "10"))
+LIVE_WINDOW_MAX = int(os.getenv("LIVE_WINDOW_MAX", "15"))
+LIVE_MAX_VEHICLES = int(os.getenv("LIVE_MAX_VEHICLES", "200"))
 
 DDL = """
 CREATE TABLE IF NOT EXISTS ndtp_telemetry (
@@ -65,6 +64,21 @@ CREATE TABLE IF NOT EXISTS schedule_stops (
     tr_id TEXT,
     geom TEXT
 );
+CREATE TABLE IF NOT EXISTS route_features (
+    id BIGSERIAL PRIMARY KEY,
+    tr_id TEXT,
+    event_time TEXT,
+    lat DOUBLE PRECISION,
+    lon DOUBLE PRECISION,
+    speed DOUBLE PRECISION,
+    heading DOUBLE PRECISION,
+    matched_lat DOUBLE PRECISION,
+    matched_lon DOUBLE PRECISION,
+    route_progress_m DOUBLE PRECISION,
+    route_progress_frac DOUBLE PRECISION,
+    dist_to_route_m DOUBLE PRECISION,
+    seg_index INTEGER
+);
 """
 
 
@@ -76,6 +90,13 @@ def load_csv(path: str) -> pd.DataFrame:
 
 async def init_db(conn):
     await conn.execute(DDL)
+    # Postgres не поддерживает ADD COLUMN IF NOT EXISTS в DDL — добавляем колонку безопасно
+    has = await conn.fetchval(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='predictions' AND column_name='stale'"
+    )
+    if not has:
+        await conn.execute("ALTER TABLE predictions ADD COLUMN stale BOOLEAN DEFAULT false")
 
 
 async def seed_static(conn):
@@ -142,6 +163,186 @@ async def fetchtab(conn, sql, *args) -> list:
     return [dict(r) for r in rows]
 
 
+async def map_match_telemetry(conn):
+    """Map Matching: проецирует телеметрию на нить маршрута в route_features."""
+    sched = await fetchtab(conn, "SELECT tr_id, geom FROM schedule_stops")
+    from collections import OrderedDict
+    order: dict[str, list[tuple]] = OrderedDict()
+    for row in sched:
+        order.setdefault(row["tr_id"], []).append(decode_geom(row["geom"]))
+    has_route = [tr for tr, stops in order.items() if len(stops) >= 2]
+    if not has_route:
+        return
+
+    recent = await fetchtab(
+        conn,
+        "SELECT tr_id, event_time, lat, lon, speed, heading "
+        "FROM ndtp_telemetry WHERE location_valid AND tr_id = ANY($1) "
+        "ORDER BY id DESC LIMIT 1500",
+        has_route,
+    )
+    if not recent:
+        return
+
+    written = 0
+    for tr in has_route:
+        mm = MapMatcher(order[tr])
+        for p in recent:
+            if p["tr_id"] != tr:
+                continue
+            try:
+                res = mm.match(p["lat"], p["lon"], heading=p["heading"], speed=p["speed"])
+                await conn.execute(
+                    """
+                    INSERT INTO route_features
+                        (tr_id,event_time,lat,lon,speed,heading,
+                         matched_lat,matched_lon,route_progress_m,route_progress_frac,
+                         dist_to_route_m,seg_index)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    """,
+                    tr, p["event_time"], p["lat"], p["lon"], p.get("speed"),
+                    p.get("heading"), res["matched_lat"], res["matched_lon"],
+                    res["route_progress_m"], res["route_progress_frac"],
+                    res["dist_to_route_m"], res["seg_index"],
+                )
+                written += 1
+            except Exception:
+                continue
+        if written:
+            break  # за один цикл достаточно одной машины (демонстрация контура)
+    print(f"[mapmatch] записано {written} записей Map Matching", flush=True)
+
+
+def _current_dev_s(grp_sched, last, now_naive):
+    """Оценка текущего отклонения ТС: задержка на последней уже пройденной остановке."""
+    pts = [decode_geom(g) for g in grp_sched["geom"]]
+    if len(pts) < 2:
+        return np.nan
+    mm = MapMatcher(pts)
+    res = mm.match(float(last["lat"]), float(last["lon"]))
+    prog = res["route_progress_m"]
+    offsets = [0.0]
+    for i in range(len(pts) - 1):
+        offsets.append(offsets[-1] + mm.seg_len[i])
+    times = grp_sched["time_begin"].tolist()
+    last_passed = None
+    for off, tb in zip(offsets, times):
+        if off <= prog + 5.0:
+            last_passed = tb
+    if last_passed is None or pd.isna(last_passed):
+        return np.nan
+    return (now_naive - last_passed).total_seconds()
+
+
+async def live_early_warning(conn):
+    """Живое раннее оповещение на потоке.
+
+    Для каждого активного ТС ищет ближайшую плановую остановку из schedule_stops,
+    чьё плановое прибытие попадает в окно T+10..15 мин (горизонт из ТЗ), собирает
+    те же 24 признака (features.build_features, только данные на момент T) и сразу
+    пишет прогноз задержки в predictions. Прогноз подписан: '+' => опоздание,
+    '-' => опережение.
+    """
+    if not model.ready:
+        print(f"[live] модель не загружена: {model.error}", flush=True)
+        return
+
+    now_utc = datetime.now(timezone.utc)
+    now_naive = now_utc.replace(tzinfo=None)
+    T_dt = pd.Timestamp(now_naive)
+    lo = T_dt + pd.Timedelta(minutes=LIVE_WINDOW_MIN)
+    hi = T_dt + pd.Timedelta(minutes=LIVE_WINDOW_MAX)
+
+    sched = pd.DataFrame(await fetchtab(
+        conn, "SELECT tt_action_item_id, time_begin, tr_id, geom FROM schedule_stops"))
+    if sched.empty:
+        return
+    sched["time_begin"] = pd.to_datetime(sched["time_begin"])
+    sched["tr_id"] = sched["tr_id"].astype(str)
+
+    active = await fetchtab(
+        conn, "SELECT DISTINCT tr_id FROM ndtp_telemetry WHERE location_valid")
+    if not active:
+        return
+    active_ids = {str(r["tr_id"]) for r in active}
+    sched = sched[sched["tr_id"].isin(active_ids)]
+    if sched.empty:
+        return
+
+    nxt = sched[(sched["time_begin"] > lo) & (sched["time_begin"] <= hi)]
+
+    rows = []
+    for tr, grp in nxt.groupby("tr_id"):
+        if len(rows) >= LIVE_MAX_VEHICLES:
+            break
+        cand = grp.nsmallest(1, "time_begin").iloc[0]  # ближайшая в окне T+10..15 мин
+        grp_sched = sched[sched["tr_id"] == tr].sort_values("time_begin")
+
+        tele_tr = await fetchtab(
+            conn,
+            "SELECT event_time, location_valid, lon, lat, speed, heading "
+            "FROM ndtp_telemetry WHERE tr_id = $1 AND location_valid "
+            "ORDER BY id DESC LIMIT 1",
+            tr,
+        )
+        if not tele_tr:
+            continue
+        last = tele_tr[0]
+        cur_dev = _current_dev_s(grp_sched, last, now_naive)
+        rows.append({
+            "sample_id": f"live_{tr}",                       # стабильный id: текущий алерт по ТС
+            "tr_id": tr,
+            "T": now_naive,
+            "target_stop_id": str(cand["tt_action_item_id"]),
+            "target_time_begin": cand["time_begin"],
+            "cur_dev_s": cur_dev,
+        })
+
+    if not rows:
+        return
+
+    points = pd.DataFrame(rows)
+    tele = pd.DataFrame(await fetchtab(
+        conn,
+        "SELECT event_time, tr_id, location_valid, lon, lat, speed "
+        "FROM ndtp_telemetry ORDER BY id DESC LIMIT $1",
+        TELEMETRY_LIMIT,
+    ))
+
+    _t0 = time.perf_counter()                       # метрика latency (критерий 5)
+    feats = build_features(points, tele, sched)
+    preds = model.booster.predict(feats[FEATURES])
+    infer_ms = (time.perf_counter() - _t0) * 1000.0
+
+    now = datetime.now(timezone.utc)
+    last_received = await conn.fetchval("SELECT MAX(receive_time) FROM ndtp_telemetry")
+    stale = False
+    if last_received is not None:
+        lr = last_received if last_received.tzinfo else last_received.replace(tzinfo=timezone.utc)
+        stale = (now - lr).total_seconds() > STALE_AFTER_SECONDS
+
+    n_late = 0
+    for sid, val in zip(feats.index, preds):
+        pred = float(round(val, 1))
+        if pred > 0:
+            n_late += 1
+        await conn.execute(
+            """
+            INSERT INTO predictions (sample_id, prediction, stale)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (sample_id) DO UPDATE
+                SET prediction = EXCLUDED.prediction, stale = EXCLUDED.stale
+            """,
+            str(sid), pred, stale,
+        )
+    print(
+        f"[live] алертов={len(preds)} опозданий={n_late} ранних={len(preds) - n_late} "
+        f"stale={stale} latency={infer_ms:.1f}ms "
+        f"({infer_ms / len(preds):.1f}ms/алерт если>0)",
+        flush=True,
+    )
+
+
 async def infer(conn):
     if not model.ready:
         print(f"[worker] модель не загружена: {model.error}", flush=True)
@@ -163,18 +364,32 @@ async def infer(conn):
         )
     )
 
+    # --- деградация: определяем свежесть последнего принятого пакета ---
+    last_received = await conn.fetchval(
+        "SELECT MAX(receive_time) FROM ndtp_telemetry"
+    )
+    stale = False
+    if last_received is not None:
+        now = datetime.now(timezone.utc)
+        last = last_received if last_received.tzinfo else last_received.replace(tzinfo=timezone.utc)
+        age = (now - last).total_seconds()
+        stale = age > STALE_AFTER_SECONDS
+    if stale:
+        print(f"[worker] поток молчит >{STALE_AFTER_SECONDS}s — прогноз по последним данным (stale)", flush=True)
+
     feats = build_features(points, tele, schedule)
     preds = model.booster.predict(feats[FEATURES])
     for sid, val in zip(feats.index, preds):
         await conn.execute(
             """
-            INSERT INTO predictions (sample_id, prediction)
-            VALUES ($1, $2)
-            ON CONFLICT (sample_id) DO UPDATE SET prediction = EXCLUDED.prediction
+            INSERT INTO predictions (sample_id, prediction, stale)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (sample_id) DO UPDATE
+                SET prediction = EXCLUDED.prediction, stale = EXCLUDED.stale
             """,
-            str(sid), float(round(val, 1)),
+            str(sid), float(round(val, 1)), stale,
         )
-    print(f"[worker] записано {len(preds)} предсказаний", flush=True)
+    print(f"[worker] записано {len(preds)} предсказаний (stale={stale})", flush=True)
 
 
 async def main():
@@ -186,6 +401,8 @@ async def main():
             await init_db(conn)
             await seed_static(conn)
             await infer(conn)
+            await live_early_warning(conn)
+            await map_match_telemetry(conn)
             await conn.close()
         except Exception as exc:
             print(f"[worker] ошибка: {exc!r}", flush=True)
