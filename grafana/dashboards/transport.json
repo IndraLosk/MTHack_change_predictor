@@ -145,7 +145,7 @@
               "options": {
                 "basemap": {
                   "config": {
-                    "url": "https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}&v=1"
+                    "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
                   },
                   "name": "Layer 0",
                   "noRepeat": false,
